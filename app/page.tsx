@@ -9,6 +9,7 @@ import {
   subjects,
   initialTeachers,
   timetableEntries,
+  classTeachers,
   sortBySchoolOrder,
   sortClasses,
   type Teacher,
@@ -50,6 +51,7 @@ const STORAGE_KEY = "amaltas-school-scheduler-data-v1";
 export default function Home() {
   const [teachers, setTeachers] = useState<Teacher[]>(initialTeachers);
   const [selectedClass, setSelectedClass] = useState(standards[0] || "NUR A");
+  const [selectedDailyViewDay, setSelectedDailyViewDay] = useState("Monday");
   const [selectedAbsenceDay, setSelectedAbsenceDay] = useState("Monday");
   const [selectedAbsentTeacherId, setSelectedAbsentTeacherId] = useState(
     initialTeachers[0]?.id.toString() || "1"
@@ -62,6 +64,8 @@ export default function Home() {
     initialTeachers[0]?.id || 1
   );
   const [storageReady, setStorageReady] = useState(false);
+  const [showWeeklyCovers, setShowWeeklyCovers] = useState(true);
+  const [showDailyCovers, setShowDailyCovers] = useState(true);
 
   const [absences, setAbsences] = useState<Absence[]>([]);
   const [coverAssignments, setCoverAssignments] = useState<CoverAssignment[]>([]);
@@ -187,6 +191,19 @@ export default function Home() {
     );
   }
 
+  function getWeeklyClassCount(teacherId: number) {
+    const teacher = teachers.find((item) => item.id === teacherId);
+    if (!teacher) return 0;
+
+    return timetableEntries.filter(
+      (entry) => normalizeName(entry.teacherName) === normalizeName(teacher.name)
+    ).length;
+  }
+
+  function getClassTeacherName(className: string) {
+    return classTeachers.find((item) => item.className === className)?.teacherName || "Not listed";
+  }
+
   function isTeacherAlreadyTeaching(teacher: Teacher, day: string, period: string) {
     return timetableEntries.some(
       (entry) =>
@@ -286,6 +303,33 @@ export default function Home() {
     items: selectedTeacherSchedule.filter((item) => item.day === day),
   }));
 
+  const selectedTeacherWeeklyCount = selectedTeacherProfile
+    ? getWeeklyClassCount(selectedTeacherProfile.id)
+    : 0;
+
+  const dailyAllClassRows = standards.map((className) => ({
+    className,
+    classTeacherName: getClassTeacherName(className),
+    periods: periods.map((period) => {
+      const coverAssignment = coverAssignments.find(
+        (assignment) =>
+          assignment.day === selectedDailyViewDay &&
+          assignment.period === period &&
+          assignment.className === className
+      );
+      const coverTeacher = coverAssignment
+        ? teachers.find((teacher) => teacher.id === coverAssignment.coverTeacherId)
+        : null;
+
+      return {
+        period,
+        subject: getSubjectForSlot(selectedDailyViewDay, period, className),
+        teacherName: getTeacherNameForSlot(selectedDailyViewDay, period, className),
+        coverTeacherName: coverTeacher?.name || "",
+      };
+    }),
+  }));
+
   const subjectOptions = useMemo(() => {
     return ["All", ...Array.from(new Set(teachers.flatMap((teacher) => teacher.subjects))).sort()];
   }, [teachers]);
@@ -315,6 +359,15 @@ export default function Home() {
   function removeAbsence(id: number) {
     const removed = absences.find((absence) => absence.id === id);
     setAbsences(absences.filter((absence) => absence.id !== id));
+
+    if (removed) {
+      setCoverAssignments(
+        coverAssignments.filter(
+          (assignment) =>
+            !(assignment.absentTeacherId === removed.teacherId && assignment.day === removed.day)
+        )
+      );
+    }
 
     if (
       removed &&
@@ -444,6 +497,8 @@ export default function Home() {
             .teacher { color: #475569; }
             .cover { margin-top: 6px; padding: 4px; background: #dcfce7; color: #166534; border-radius: 4px; font-size: 11px; }
             .meta { margin: 10px 0 18px; color: #475569; font-size: 13px; }
+            .page-break { page-break-after: always; break-after: page; }
+            .page-break:last-child { page-break-after: auto; break-after: auto; }
             @media print { button { display: none; } body { margin: 16px; } }
           </style>
         </head>
@@ -462,18 +517,18 @@ export default function Home() {
     printWindow.document.close();
   }
 
-  function printSelectedTimetable() {
+  function renderTimetableHtml(className: string, includePageBreak = false, includeCovers = true) {
     const rows = periods
       .map((period) => {
         const cells = days
           .map((day) => {
-            const teacherName = getTeacherNameForSlot(day, period, selectedClass);
-            const subject = getSubjectForSlot(day, period, selectedClass);
+            const teacherName = getTeacherNameForSlot(day, period, className);
+            const subject = getSubjectForSlot(day, period, className);
             const coverAssignment = coverAssignments.find(
               (assignment) =>
                 assignment.day === day &&
                 assignment.period === period &&
-                assignment.className === selectedClass
+                assignment.className === className
             );
             const coverTeacher = coverAssignment
               ? teachers.find((teacher) => teacher.id === coverAssignment.coverTeacherId)
@@ -483,7 +538,7 @@ export default function Home() {
               <td>
                 <div class="subject">${escapeHtml(subject)}</div>
                 <div class="teacher">${escapeHtml(teacherName)}</div>
-                ${coverTeacher ? `<div class="cover">Cover: ${escapeHtml(coverTeacher.name)}</div>` : ""}
+                ${includeCovers && coverTeacher ? `<div class="cover">Cover: ${escapeHtml(coverTeacher.name)}</div>` : ""}
               </td>
             `;
           })
@@ -493,19 +548,78 @@ export default function Home() {
       })
       .join("");
 
-    printHtml(
-      `${schoolName} ${selectedClass} Timetable`,
-      `
+    return `
+      <section class="${includePageBreak ? "page-break" : ""}">
         <div class="header">
           <p class="school">${escapeHtml(schoolName)}</p>
-          <p class="subtitle">Weekly Timetable - Class ${escapeHtml(selectedClass)}</p>
+          <p class="subtitle">Weekly Timetable - Class ${escapeHtml(className)}</p>
         </div>
-        <p class="meta">Generated from the current app data.</p>
+        <p class="meta">Class Teacher: ${escapeHtml(getClassTeacherName(className))}</p>
         <table>
           <thead>
             <tr>
               <th>Period</th>
               ${days.map((day) => `<th>${escapeHtml(day)}</th>`).join("")}
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </section>
+    `;
+  }
+
+  function printSelectedTimetable() {
+    printHtml(
+      `${schoolName} ${selectedClass} Timetable`,
+      renderTimetableHtml(selectedClass, false, showWeeklyCovers)
+    );
+  }
+
+  function printAllTimetables() {
+    printHtml(
+      `${schoolName} All Class Timetables`,
+      standards.map((className) => renderTimetableHtml(className, true, showWeeklyCovers)).join("")
+    );
+  }
+
+  function printDailyAllClasses() {
+    const rows = dailyAllClassRows
+      .map((row) => {
+        const cells = row.periods
+          .map(
+            (item) => `
+              <td>
+                <div class="subject">${escapeHtml(item.subject)}</div>
+                <div class="teacher">${escapeHtml(item.teacherName)}</div>
+                ${showDailyCovers && item.coverTeacherName ? `<div class="cover">Cover: ${escapeHtml(item.coverTeacherName)}</div>` : ""}
+              </td>
+            `
+          )
+          .join("");
+
+        return `
+          <tr>
+            <td class="period">${escapeHtml(row.className)}</td>
+            <td>${escapeHtml(row.classTeacherName)}</td>
+            ${cells}
+          </tr>
+        `;
+      })
+      .join("");
+
+    printHtml(
+      `${schoolName} ${selectedDailyViewDay} All Classes`,
+      `
+        <div class="header">
+          <p class="school">${escapeHtml(schoolName)}</p>
+          <p class="subtitle">All Classes Timetable - ${escapeHtml(selectedDailyViewDay)}</p>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Class</th>
+              <th>Class Teacher</th>
+              ${periods.map((period) => `<th>Period ${escapeHtml(period)}</th>`).join("")}
             </tr>
           </thead>
           <tbody>${rows}</tbody>
@@ -522,6 +636,7 @@ export default function Home() {
             <td>${escapeHtml(teacher.name)}</td>
             <td>${escapeHtml(teacher.subjects.join(", "))}</td>
             <td>${escapeHtml(sortClasses(teacher.classes).join(", "))}</td>
+            <td>${escapeHtml(getWeeklyClassCount(teacher.id))}</td>
             <td>${escapeHtml(teacher.unavailable.length ? teacher.unavailable.join(", ") : "None")}</td>
           </tr>
         `
@@ -545,6 +660,7 @@ export default function Home() {
               <th>Name</th>
               <th>Subjects</th>
               <th>Classes</th>
+              <th>Weekly Periods</th>
               <th>Unavailable</th>
             </tr>
           </thead>
@@ -557,22 +673,17 @@ export default function Home() {
   return (
     <main className="min-h-screen bg-slate-100 p-6 text-slate-900">
       <div className="mx-auto max-w-7xl space-y-6">
-        <header className="rounded-2xl bg-slate-900 p-6 text-white shadow">
-          <p className="text-sm text-slate-300">Teacher Management Demo</p>
-          <h1 className="text-4xl font-bold">{schoolName}</h1>
-          <p className="mt-2 text-slate-300">
-            Real timetable data loaded from the school spreadsheet.
-          </p>
-          <p className="mt-3 rounded-lg bg-slate-800 p-3 text-sm text-slate-200">
-            Changes are saved in this browser, so teachers, absences, and cover assignments stay after reopening the tab.
-          </p>
+        <header className="flex justify-center py-4">
+          <img
+            src="/amaltas-logo.png"
+            alt="Amaltas School logo"
+            className="max-h-32 w-auto object-contain"
+          />
         </header>
 
         <section className="grid gap-4 md:grid-cols-4">
-          <Card title="Teachers" value={teachers.length.toString()} />
-          <Card title="Classes" value={`${standards[0]}–${standards[standards.length - 1]}`} />
-          <Card title="Teachers Absent" value={absences.length.toString()} />
-          <Card title="Covers Assigned" value={coverAssignments.length.toString()} />
+          <Card title="Teachers" value={teachers.length.toString()} className="md:col-span-2" />
+          <Card title="Available Standards" value={`${standards[0]}–${standards[standards.length - 1]}`} className="md:col-span-2" />
         </section>
 
         <section className="rounded-xl bg-white p-5 shadow">
@@ -760,14 +871,14 @@ export default function Home() {
           {coverAssignments.length === 0 ? (
             <p className="text-sm text-slate-500">No covers assigned yet.</p>
           ) : (
-            <div className="grid gap-3 md:grid-cols-2">
+            <div className="grid gap-2 md:grid-cols-3 xl:grid-cols-4">
               {sortBySchoolOrder(coverAssignments).map((assignment) => {
                 const absentTeacher = teachers.find((t) => t.id === assignment.absentTeacherId);
                 const coverTeacher = teachers.find((t) => t.id === assignment.coverTeacherId);
 
                 return (
-                  <div key={assignment.id} className="rounded-lg border p-4">
-                    <h3 className="font-bold">
+                  <div key={assignment.id} className="rounded-lg border p-3 text-sm">
+                    <h3 className="font-semibold">
                       Class {assignment.className} — Period {assignment.period}
                     </h3>
                     <p className="text-sm text-slate-600">
@@ -779,7 +890,7 @@ export default function Home() {
                     </p>
                     <button
                       onClick={() => removeCoverAssignment(assignment.id)}
-                      className="mt-3 rounded-lg bg-slate-100 px-3 py-2 text-sm"
+                      className="mt-2 rounded-lg bg-slate-100 px-2 py-1 text-xs"
                     >
                       Remove Assignment
                     </button>
@@ -788,6 +899,75 @@ export default function Home() {
               })}
             </div>
           )}
+        </section>
+
+        <section className="rounded-xl bg-white p-5 shadow">
+          <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h2 className="text-xl font-bold">Daily All-Class Timetable</h2>
+              <p className="text-sm text-slate-600">Select a day to see every class on one page.</p>
+            </div>
+            <div className="flex flex-col gap-2 md:flex-row md:items-center">
+              <select
+                value={selectedDailyViewDay}
+                onChange={(e) => setSelectedDailyViewDay(e.target.value)}
+                className="rounded-lg border p-2"
+              >
+                {days.map((day) => (
+                  <option key={day}>{day}</option>
+                ))}
+              </select>
+              <label className="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={showDailyCovers}
+                  onChange={(e) => setShowDailyCovers(e.target.checked)}
+                />
+                Show covers
+              </label>
+              <button
+                onClick={printDailyAllClasses}
+                className="rounded-lg bg-slate-900 px-4 py-2 text-sm text-white"
+              >
+                Print Day View
+              </button>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse text-xs">
+              <thead>
+                <tr>
+                  <th className="border bg-slate-100 p-3 text-left">Class</th>
+                  <th className="border bg-slate-100 p-3 text-left">Class Teacher</th>
+                  {periods.map((period) => (
+                    <th key={period} className="border bg-slate-100 p-3 text-left">
+                      Period {period}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {dailyAllClassRows.map((row) => (
+                  <tr key={row.className}>
+                    <td className="border p-3 font-bold">{row.className}</td>
+                    <td className="border p-3 text-slate-700">{row.classTeacherName}</td>
+                    {row.periods.map((item) => (
+                      <td key={`${row.className}-${item.period}`} className="border p-3">
+                        <div className="font-semibold">{item.subject}</div>
+                        <div className="text-slate-600">{item.teacherName}</div>
+                        {showDailyCovers && item.coverTeacherName && (
+                          <div className="mt-2 rounded bg-green-100 p-2 text-xs text-green-800">
+                            Cover: {item.coverTeacherName}
+                          </div>
+                        )}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </section>
 
         <section className="rounded-xl bg-white p-5 shadow">
@@ -806,11 +986,25 @@ export default function Home() {
                   <option key={standard}>{standard}</option>
                 ))}
               </select>
+              <label className="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={showWeeklyCovers}
+                  onChange={(e) => setShowWeeklyCovers(e.target.checked)}
+                />
+                Show covers
+              </label>
               <button
                 onClick={printSelectedTimetable}
                 className="rounded-lg bg-slate-900 px-4 py-2 text-sm text-white"
               >
                 Print Schedule
+              </button>
+              <button
+                onClick={printAllTimetables}
+                className="rounded-lg bg-slate-700 px-4 py-2 text-sm text-white"
+              >
+                Print All Timetables
               </button>
             </div>
           </div>
@@ -851,7 +1045,7 @@ export default function Home() {
                           <div className="font-semibold">{subject}</div>
                           <div className="text-slate-600">{teacherName}</div>
 
-                          {coverTeacher && (
+                          {showWeeklyCovers && coverTeacher && (
                             <div className="mt-2 rounded bg-green-100 p-2 text-xs text-green-800">
                               Cover: {coverTeacher.name}
                             </div>
@@ -863,6 +1057,18 @@ export default function Home() {
                 ))}
               </tbody>
             </table>
+          </div>
+        </section>
+
+        <section className="rounded-xl bg-white p-5 shadow">
+          <h2 className="mb-4 text-xl font-bold">Class Teachers</h2>
+          <div className="grid gap-3 md:grid-cols-5">
+            {classTeachers.map((item) => (
+              <div key={item.className} className="rounded-lg border p-4">
+                <p className="text-sm text-slate-500">Class {item.className}</p>
+                <h3 className="font-bold">{item.teacherName}</h3>
+              </div>
+            ))}
           </div>
         </section>
 
@@ -888,6 +1094,9 @@ export default function Home() {
                 </p>
                 <p className="text-sm text-slate-600">
                   Classes: {sortClasses(selectedTeacherProfile.classes).join(", ")}
+                </p>
+                <p className="mt-2 rounded-lg bg-slate-100 p-3 text-sm font-semibold text-slate-800">
+                  Weekly periods/classes: {selectedTeacherWeeklyCount}
                 </p>
               </div>
 
@@ -1004,6 +1213,7 @@ export default function Home() {
                   <th className="border bg-slate-100 p-3 text-left">Name</th>
                   <th className="border bg-slate-100 p-3 text-left">Subjects</th>
                   <th className="border bg-slate-100 p-3 text-left">Classes</th>
+                  <th className="border bg-slate-100 p-3 text-left">Weekly Periods</th>
                   <th className="border bg-slate-100 p-3 text-left">Unavailable</th>
                   <th className="border bg-slate-100 p-3 text-left">Actions</th>
                 </tr>
@@ -1019,6 +1229,7 @@ export default function Home() {
                     </td>
                     <td className="border p-3">{teacher.subjects.join(", ")}</td>
                     <td className="border p-3">{sortClasses(teacher.classes).join(", ")}</td>
+                    <td className="border p-3 font-semibold">{getWeeklyClassCount(teacher.id)}</td>
                     <td className="border p-3">
                       {teacher.unavailable.length ? teacher.unavailable.join(", ") : "None"}
                     </td>
@@ -1041,9 +1252,9 @@ export default function Home() {
   );
 }
 
-function Card({ title, value }: { title: string; value: string }) {
+function Card({ title, value, className = "" }: { title: string; value: string; className?: string }) {
   return (
-    <div className="rounded-xl bg-white p-5 shadow">
+    <div className={`rounded-xl bg-white p-5 shadow ${className}`}>
       <p className="text-sm text-slate-500">{title}</p>
       <h2 className="text-2xl font-bold">{value}</h2>
     </div>

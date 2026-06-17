@@ -16,6 +16,11 @@ export type TimetableEntry = {
   day: string;
 };
 
+export type ClassTeacher = {
+  className: string;
+  teacherName: string;
+};
+
 export const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 export const periods = ["1", "2", "3", "4", "5", "6", "7", "8"];
 export const standards = ["NUR A", "LKG A", "LKG B", "UKG A", "UKG B", "I A", "I B", "II A", "II B", "III A", "III B", "IV A", "IV B", "V A", "V B", "VI A", "VI B", "VII A", "VII B", "VIII A", "VIII B", "IX A", "IX B", "X A", "X B"];
@@ -7978,6 +7983,109 @@ const rawTimetableEntries: TimetableEntry[] = [
     "day": "Monday"
   }
 ];
+
+export const classTeachers: ClassTeacher[] = sortBySchoolOrder([
+  {
+    "className": "NUR A",
+    "teacherName": "Manju Devi"
+  },
+  {
+    "className": "LKG A",
+    "teacherName": "Anjali Kumari"
+  },
+  {
+    "className": "LKG B",
+    "teacherName": "Rani Parween"
+  },
+  {
+    "className": "UKG A",
+    "teacherName": "Shagufa Bint Ekram"
+  },
+  {
+    "className": "UKG B",
+    "teacherName": "Rajani Bala"
+  },
+  {
+    "className": "I A",
+    "teacherName": "Anubhav Roushan Sinha"
+  },
+  {
+    "className": "I B",
+    "teacherName": "Renu Kumari"
+  },
+  {
+    "className": "II A",
+    "teacherName": "Moni Kumari"
+  },
+  {
+    "className": "II B",
+    "teacherName": "Shailendra Kumar"
+  },
+  {
+    "className": "III A",
+    "teacherName": "Anamika Mishra"
+  },
+  {
+    "className": "III B",
+    "teacherName": "Kamal Kumar"
+  },
+  {
+    "className": "IV A",
+    "teacherName": "Nand Kishor Chaurasiya"
+  },
+  {
+    "className": "IV B",
+    "teacherName": "Neha Kumari"
+  },
+  {
+    "className": "V A",
+    "teacherName": "Irshad Khan"
+  },
+  {
+    "className": "V B",
+    "teacherName": "Suprabhat Kumar Ghosh"
+  },
+  {
+    "className": "VI A",
+    "teacherName": "Sangeeta Sinha"
+  },
+  {
+    "className": "VI B",
+    "teacherName": "Vaishnavi Ojha"
+  },
+  {
+    "className": "VII A",
+    "teacherName": "Md. Sohrab Ansari"
+  },
+  {
+    "className": "VII B",
+    "teacherName": "Nandani Kumari"
+  },
+  {
+    "className": "VIII A",
+    "teacherName": "Hem Neeraj"
+  },
+  {
+    "className": "VIII B",
+    "teacherName": "Sidheshwar Ojha"
+  },
+  {
+    "className": "IX A",
+    "teacherName": "Rina Kumari"
+  },
+  {
+    "className": "IX B",
+    "teacherName": "Bhupendra Kumar"
+  },
+  {
+    "className": "X A",
+    "teacherName": "Qutubuddin Ansari"
+  },
+  {
+    "className": "X B",
+    "teacherName": "Devdatta Richhariya"
+  }
+]);
 
 export const timetableEntries: TimetableEntry[] = sortBySchoolOrder(
   rawTimetableEntries.map((entry) => ({
