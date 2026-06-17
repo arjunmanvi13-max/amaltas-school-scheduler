@@ -12,6 +12,7 @@ import {
   classTeachers,
   sortBySchoolOrder,
   sortClasses,
+  inferTeacherGender,
   type Teacher,
 } from "@/src/data/schoolData";
 
@@ -19,6 +20,8 @@ type Absence = {
   id: number;
   teacherId: number;
   day: string;
+  startPeriod: string;
+  endPeriod: string;
 };
 
 type CoverAssignment = {
@@ -41,6 +44,7 @@ type CoverRequest = {
 
 type AddTeacherForm = {
   name: string;
+  gender: "Male" | "Female";
   subjects: string;
   classes: string;
   unavailable: string;
@@ -53,6 +57,8 @@ export default function Home() {
   const [selectedClass, setSelectedClass] = useState(standards[0] || "NUR A");
   const [selectedDailyViewDay, setSelectedDailyViewDay] = useState("Monday");
   const [selectedAbsenceDay, setSelectedAbsenceDay] = useState("Monday");
+  const [selectedAbsenceStartPeriod, setSelectedAbsenceStartPeriod] = useState(periods[0] || "1");
+  const [selectedAbsenceEndPeriod, setSelectedAbsenceEndPeriod] = useState(periods[periods.length - 1] || "8");
   const [selectedAbsentTeacherId, setSelectedAbsentTeacherId] = useState(
     initialTeachers[0]?.id.toString() || "1"
   );
@@ -71,6 +77,7 @@ export default function Home() {
   const [coverAssignments, setCoverAssignments] = useState<CoverAssignment[]>([]);
   const [addTeacherForm, setAddTeacherForm] = useState<AddTeacherForm>({
     name: "",
+    gender: "Female",
     subjects: "",
     classes: "",
     unavailable: "",
@@ -83,10 +90,23 @@ export default function Home() {
         const parsed = JSON.parse(saved);
 
         if (Array.isArray(parsed.teachers) && parsed.teachers.length > 0) {
-          setTeachers(parsed.teachers);
+          setTeachers(
+            parsed.teachers.map((teacher: Teacher) => ({
+              ...teacher,
+              gender: teacher.gender || inferTeacherGender(teacher.name),
+            }))
+          );
         }
         if (Array.isArray(parsed.absences)) {
-          setAbsences(parsed.absences);
+          setAbsences(
+            parsed.absences.map((absence: Partial<Absence>) => ({
+              id: Number(absence.id) || Date.now(),
+              teacherId: Number(absence.teacherId),
+              day: absence.day || "Monday",
+              startPeriod: absence.startPeriod || periods[0] || "1",
+              endPeriod: absence.endPeriod || periods[periods.length - 1] || "8",
+            }))
+          );
         }
         if (Array.isArray(parsed.coverAssignments)) {
           setCoverAssignments(parsed.coverAssignments);
@@ -127,6 +147,43 @@ export default function Home() {
       .filter(Boolean);
   }
 
+  function isPeriodInRange(period: string | number, startPeriod: string, endPeriod: string) {
+    const periodNumber = Number(period);
+    return periodNumber >= Number(startPeriod) && periodNumber <= Number(endPeriod);
+  }
+
+  function isPrimaryClass(className: string) {
+    return ["NUR", "LKG", "UKG", "I", "II"].some((prefix) => className.startsWith(prefix));
+  }
+
+  function isFemalePrioritySubject(subject: string) {
+    const normalized = subject.toLowerCase();
+    return ["drawing", "art", "arts", "skill", "skill development", "activity", "craft"].some((keyword) =>
+      normalized.includes(keyword)
+    );
+  }
+
+  function escapeCsv(value: string | number | undefined | null) {
+    const text = String(value ?? "");
+    if (/[",\n]/.test(text)) {
+      return `"${text.replaceAll('"', '""')}"`;
+    }
+    return text;
+  }
+
+  function downloadCsv(filename: string, rows: (string | number)[][]) {
+    const csv = rows.map((row) => row.map(escapeCsv).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }
+
   function escapeHtml(value: string | number | undefined | null) {
     return String(value ?? "")
       .replaceAll("&", "&amp;")
@@ -155,7 +212,7 @@ export default function Home() {
     return entry?.subject || "Free";
   }
 
-  function getAffectedClassesForTeacher(teacherId: number, day: string) {
+  function getAffectedClassesForTeacher(teacherId: number, day: string, startPeriod = periods[0] || "1", endPeriod = periods[periods.length - 1] || "8") {
     const teacher = teachers.find((item) => item.id === teacherId);
     if (!teacher) return [];
 
@@ -163,7 +220,9 @@ export default function Home() {
       timetableEntries
         .filter(
           (entry) =>
-            entry.day === day && normalizeName(entry.teacherName) === normalizeName(teacher.name)
+            entry.day === day &&
+            isPeriodInRange(entry.period, startPeriod, endPeriod) &&
+            normalizeName(entry.teacherName) === normalizeName(teacher.name)
         )
         .map((entry) => ({
           day: entry.day,
@@ -228,7 +287,10 @@ export default function Home() {
         const isUnavailable = teacher.unavailable.includes(slot);
         const alreadyTeaching = isTeacherAlreadyTeaching(teacher, day, period);
         const absentToday = absences.some(
-          (absence) => absence.teacherId === teacher.id && absence.day === day
+          (absence) =>
+            absence.teacherId === teacher.id &&
+            absence.day === day &&
+            isPeriodInRange(period, absence.startPeriod, absence.endPeriod)
         );
 
         return !isAbsentTeacher && !isUnavailable && !alreadyTeaching && !absentToday;
@@ -239,11 +301,13 @@ export default function Home() {
         if (teacher.subjects.some((subject) => normalizeName(subject) === normalizeName(subjectForSlot))) {
           score += 40;
         }
+        if (teacher.gender === "Female" && isPrimaryClass(className)) score += 100;
+        if (teacher.gender === "Female" && isFemalePrioritySubject(subjectForSlot)) score += 100;
 
         return {
           ...teacher,
           score,
-          match: score >= 80 ? "Best match" : score >= 50 ? "Good match" : "Available",
+          match: score >= 125 ? "Best match" : score >= 65 ? "Good match" : "Available",
         };
       })
       .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
@@ -259,13 +323,30 @@ export default function Home() {
       )
     : false;
 
+  const selectedAbsenceRecord = selectedAbsentTeacher
+    ? absences.find(
+        (absence) =>
+          absence.teacherId === selectedAbsentTeacher.id && absence.day === selectedAbsenceDay
+      )
+    : null;
+
   const affectedClassesForSelectedAbsence =
-    selectedAbsentTeacher && selectedTeacherIsAbsent
-      ? getAffectedClassesForTeacher(selectedAbsentTeacher.id, selectedAbsenceDay)
+    selectedAbsentTeacher && selectedAbsenceRecord
+      ? getAffectedClassesForTeacher(
+          selectedAbsentTeacher.id,
+          selectedAbsenceDay,
+          selectedAbsenceRecord.startPeriod,
+          selectedAbsenceRecord.endPeriod
+        )
       : [];
 
   const allAffectedPeriods = absences.flatMap((absence) =>
-    getAffectedClassesForTeacher(absence.teacherId, absence.day)
+    getAffectedClassesForTeacher(
+      absence.teacherId,
+      absence.day,
+      absence.startPeriod,
+      absence.endPeriod
+    )
   );
 
   const coverTeachers = coverRequest
@@ -330,6 +411,47 @@ export default function Home() {
     }),
   }));
 
+  const absenceReportRows = sortBySchoolOrder(
+    absences.flatMap((absence) => {
+      const absentTeacher = teachers.find((teacher) => teacher.id === absence.teacherId);
+      if (!absentTeacher) return [];
+
+      return getAffectedClassesForTeacher(
+        absence.teacherId,
+        absence.day,
+        absence.startPeriod,
+        absence.endPeriod
+      ).map((item) => {
+        const coverAssignment = coverAssignments.find(
+          (assignment) =>
+            assignment.day === item.day &&
+            assignment.period === item.period &&
+            assignment.className === item.className &&
+            assignment.absentTeacherId === absence.teacherId
+        );
+        const substituteTeacher = coverAssignment
+          ? teachers.find((teacher) => teacher.id === coverAssignment.coverTeacherId)
+          : null;
+
+        return {
+          day: item.day,
+          period: item.period,
+          className: item.className,
+          subject: item.subject,
+          originalTeacherName: absentTeacher.name,
+          substituteTeacherName: substituteTeacher?.name || "Not assigned",
+        };
+      });
+    })
+  ) as {
+    day: string;
+    period: string;
+    className: string;
+    subject: string;
+    originalTeacherName: string;
+    substituteTeacherName: string;
+  }[];
+
   const subjectOptions = useMemo(() => {
     return ["All", ...Array.from(new Set(teachers.flatMap((teacher) => teacher.subjects))).sort()];
   }, [teachers]);
@@ -340,11 +462,26 @@ export default function Home() {
 
   function markTeacherAbsent() {
     const teacherId = Number(selectedAbsentTeacherId);
+    const startPeriod = Math.min(Number(selectedAbsenceStartPeriod), Number(selectedAbsenceEndPeriod)).toString();
+    const endPeriod = Math.max(Number(selectedAbsenceStartPeriod), Number(selectedAbsenceEndPeriod)).toString();
     const alreadyMarked = absences.some(
       (absence) => absence.teacherId === teacherId && absence.day === selectedAbsenceDay
     );
 
-    if (alreadyMarked) return;
+    if (alreadyMarked) {
+      setAbsences(
+        absences.map((absence) =>
+          absence.teacherId === teacherId && absence.day === selectedAbsenceDay
+            ? {
+                ...absence,
+                startPeriod,
+                endPeriod,
+              }
+            : absence
+        )
+      );
+      return;
+    }
 
     setAbsences([
       ...absences,
@@ -352,6 +489,8 @@ export default function Home() {
         id: Date.now(),
         teacherId,
         day: selectedAbsenceDay,
+        startPeriod,
+        endPeriod,
       },
     ]);
   }
@@ -364,7 +503,11 @@ export default function Home() {
       setCoverAssignments(
         coverAssignments.filter(
           (assignment) =>
-            !(assignment.absentTeacherId === removed.teacherId && assignment.day === removed.day)
+            !(
+              assignment.absentTeacherId === removed.teacherId &&
+              assignment.day === removed.day &&
+              isPeriodInRange(assignment.period, removed.startPeriod, removed.endPeriod)
+            )
         )
       );
     }
@@ -448,6 +591,7 @@ export default function Home() {
     const newTeacher: Teacher = {
       id: Date.now(),
       name,
+      gender: addTeacherForm.gender || inferTeacherGender(name),
       subjects: splitList(addTeacherForm.subjects),
       classes: sortClasses(splitList(addTeacherForm.classes)),
       unavailable: splitList(addTeacherForm.unavailable),
@@ -456,7 +600,7 @@ export default function Home() {
     setTeachers([...teachers, newTeacher].sort((a, b) => a.name.localeCompare(b.name)));
     setSelectedTeacherProfileId(newTeacher.id);
     setSelectedAbsentTeacherId(newTeacher.id.toString());
-    setAddTeacherForm({ name: "", subjects: "", classes: "", unavailable: "" });
+    setAddTeacherForm({ name: "", gender: "Female", subjects: "", classes: "", unavailable: "" });
   }
 
   function resetSavedData() {
@@ -634,6 +778,7 @@ export default function Home() {
         (teacher) => `
           <tr>
             <td>${escapeHtml(teacher.name)}</td>
+            <td>${escapeHtml(teacher.gender)}</td>
             <td>${escapeHtml(teacher.subjects.join(", "))}</td>
             <td>${escapeHtml(sortClasses(teacher.classes).join(", "))}</td>
             <td>${escapeHtml(getWeeklyClassCount(teacher.id))}</td>
@@ -658,6 +803,7 @@ export default function Home() {
           <thead>
             <tr>
               <th>Name</th>
+              <th>Gender</th>
               <th>Subjects</th>
               <th>Classes</th>
               <th>Weekly Periods</th>
@@ -668,6 +814,151 @@ export default function Home() {
         </table>
       `
     );
+  }
+
+
+  function printAbsenceReport() {
+    const rows = absenceReportRows
+      .map(
+        (row) => `
+          <tr>
+            <td>${escapeHtml(row.day)}</td>
+            <td>Period ${escapeHtml(row.period)}</td>
+            <td>${escapeHtml(row.className)}</td>
+            <td>${escapeHtml(row.subject)}</td>
+            <td>${escapeHtml(row.originalTeacherName)}</td>
+            <td>${escapeHtml(row.substituteTeacherName)}</td>
+          </tr>
+        `
+      )
+      .join("");
+
+    printHtml(
+      `${schoolName} Absent Teacher Report`,
+      `
+        <div class="header">
+          <p class="school">${escapeHtml(schoolName)}</p>
+          <p class="subtitle">Absent Teacher Cover Report</p>
+        </div>
+        <p class="meta">Sorted by day and period. Total affected periods: ${absenceReportRows.length}</p>
+        <table>
+          <thead>
+            <tr>
+              <th>Day</th>
+              <th>Period</th>
+              <th>Standard</th>
+              <th>Subject</th>
+              <th>Original Teacher</th>
+              <th>Substitute</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      `
+    );
+  }
+
+  function downloadSelectedTimetable() {
+    downloadCsv(`${selectedClass}-weekly-timetable.csv`, [
+      ["Class", "Day", "Period", "Subject", "Teacher", "Cover"],
+      ...days.flatMap((day) =>
+        periods.map((period) => {
+          const coverAssignment = coverAssignments.find(
+            (assignment) =>
+              assignment.day === day &&
+              assignment.period === period &&
+              assignment.className === selectedClass
+          );
+          const coverTeacher = coverAssignment
+            ? teachers.find((teacher) => teacher.id === coverAssignment.coverTeacherId)
+            : null;
+
+          return [
+            selectedClass,
+            day,
+            `Period ${period}`,
+            getSubjectForSlot(day, period, selectedClass),
+            getTeacherNameForSlot(day, period, selectedClass),
+            showWeeklyCovers ? coverTeacher?.name || "" : "",
+          ];
+        })
+      ),
+    ]);
+  }
+
+  function downloadAllTimetables() {
+    downloadCsv(`all-class-weekly-timetables.csv`, [
+      ["Class", "Day", "Period", "Subject", "Teacher", "Cover"],
+      ...standards.flatMap((className) =>
+        days.flatMap((day) =>
+          periods.map((period) => {
+            const coverAssignment = coverAssignments.find(
+              (assignment) =>
+                assignment.day === day &&
+                assignment.period === period &&
+                assignment.className === className
+            );
+            const coverTeacher = coverAssignment
+              ? teachers.find((teacher) => teacher.id === coverAssignment.coverTeacherId)
+              : null;
+
+            return [
+              className,
+              day,
+              `Period ${period}`,
+              getSubjectForSlot(day, period, className),
+              getTeacherNameForSlot(day, period, className),
+              showWeeklyCovers ? coverTeacher?.name || "" : "",
+            ];
+          })
+        )
+      ),
+    ]);
+  }
+
+  function downloadDailyAllClasses() {
+    downloadCsv(`${selectedDailyViewDay}-all-classes-timetable.csv`, [
+      ["Day", "Class", "Class Teacher", "Period", "Subject", "Teacher", "Cover"],
+      ...dailyAllClassRows.flatMap((row) =>
+        row.periods.map((item) => [
+          selectedDailyViewDay,
+          row.className,
+          row.classTeacherName,
+          `Period ${item.period}`,
+          item.subject,
+          item.teacherName,
+          showDailyCovers ? item.coverTeacherName : "",
+        ])
+      ),
+    ]);
+  }
+
+  function downloadFilteredTeachers() {
+    downloadCsv(`teacher-database-filtered.csv`, [
+      ["Name", "Gender", "Subjects", "Classes", "Weekly Periods", "Unavailable"],
+      ...filteredTeachers.map((teacher) => [
+        teacher.name,
+        teacher.gender,
+        teacher.subjects.join(", "),
+        sortClasses(teacher.classes).join(", "),
+        getWeeklyClassCount(teacher.id),
+        teacher.unavailable.length ? teacher.unavailable.join(", ") : "None",
+      ]),
+    ]);
+  }
+
+  function downloadAbsenceReport() {
+    downloadCsv(`absent-teacher-cover-report.csv`, [
+      ["Day", "Period", "Standard", "Subject", "Original Teacher", "Substitute"],
+      ...absenceReportRows.map((row) => [
+        row.day,
+        `Period ${row.period}`,
+        row.className,
+        row.subject,
+        row.originalTeacherName,
+        row.substituteTeacherName,
+      ]),
+    ]);
   }
 
   return (
@@ -709,7 +1000,7 @@ export default function Home() {
         <section className="rounded-xl bg-white p-5 shadow">
           <h2 className="mb-4 text-xl font-bold">1. Mark Teacher Absent</h2>
 
-          <div className="grid gap-4 md:grid-cols-3">
+          <div className="grid gap-4 md:grid-cols-5">
             <Select
               label="Teacher"
               value={selectedAbsentTeacherId}
@@ -725,6 +1016,20 @@ export default function Home() {
               value={selectedAbsenceDay}
               options={days.map((day) => ({ label: day, value: day }))}
               onChange={setSelectedAbsenceDay}
+            />
+
+            <Select
+              label="From Period"
+              value={selectedAbsenceStartPeriod}
+              options={periods.map((period) => ({ label: `Period ${period}`, value: period }))}
+              onChange={setSelectedAbsenceStartPeriod}
+            />
+
+            <Select
+              label="To Period"
+              value={selectedAbsenceEndPeriod}
+              options={periods.map((period) => ({ label: `Period ${period}`, value: period }))}
+              onChange={setSelectedAbsenceEndPeriod}
             />
 
             <div className="flex items-end">
@@ -750,7 +1055,9 @@ export default function Home() {
                 return (
                   <div key={absence.id} className="rounded-lg border border-red-200 bg-red-50 p-4">
                     <h4 className="font-bold">{teacher.name}</h4>
-                    <p className="text-sm text-slate-600">Absent on {absence.day}</p>
+                    <p className="text-sm text-slate-600">
+                      Absent on {absence.day}, Period {absence.startPeriod}–{absence.endPeriod}
+                    </p>
                     <button
                       onClick={() => removeAbsence(absence.id)}
                       className="mt-3 rounded-lg bg-white px-3 py-2 text-sm"
@@ -872,7 +1179,7 @@ export default function Home() {
             <p className="text-sm text-slate-500">No covers assigned yet.</p>
           ) : (
             <div className="grid gap-2 md:grid-cols-3 xl:grid-cols-4">
-              {sortBySchoolOrder(coverAssignments).map((assignment) => {
+              {(sortBySchoolOrder(coverAssignments) as CoverAssignment[]).map((assignment) => {
                 const absentTeacher = teachers.find((t) => t.id === assignment.absentTeacherId);
                 const coverTeacher = teachers.find((t) => t.id === assignment.coverTeacherId);
 
@@ -904,6 +1211,64 @@ export default function Home() {
         <section className="rounded-xl bg-white p-5 shadow">
           <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
+              <h2 className="text-xl font-bold">Absent Teacher Cover Report</h2>
+              <p className="text-sm text-slate-600">Printable and downloadable report sorted by day, period, and class.</p>
+            </div>
+            <div className="flex flex-col gap-2 md:flex-row">
+              <button
+                onClick={printAbsenceReport}
+                className="rounded-lg bg-slate-900 px-4 py-2 text-sm text-white"
+              >
+                Print Absence Report
+              </button>
+              <button
+                onClick={downloadAbsenceReport}
+                className="rounded-lg bg-slate-700 px-4 py-2 text-sm text-white"
+              >
+                Download CSV
+              </button>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse text-sm">
+              <thead>
+                <tr>
+                  <th className="border bg-slate-100 p-3 text-left">Day</th>
+                  <th className="border bg-slate-100 p-3 text-left">Period</th>
+                  <th className="border bg-slate-100 p-3 text-left">Standard</th>
+                  <th className="border bg-slate-100 p-3 text-left">Subject</th>
+                  <th className="border bg-slate-100 p-3 text-left">Original Teacher</th>
+                  <th className="border bg-slate-100 p-3 text-left">Substitute</th>
+                </tr>
+              </thead>
+              <tbody>
+                {absenceReportRows.length === 0 ? (
+                  <tr>
+                    <td className="border p-3 text-slate-500" colSpan={6}>
+                      No absent teachers or affected periods yet.
+                    </td>
+                  </tr>
+                ) : (
+                  absenceReportRows.map((row) => (
+                    <tr key={`${row.day}-${row.period}-${row.className}-${row.originalTeacherName}`}>
+                      <td className="border p-3">{row.day}</td>
+                      <td className="border p-3 font-semibold">Period {row.period}</td>
+                      <td className="border p-3">{row.className}</td>
+                      <td className="border p-3">{row.subject}</td>
+                      <td className="border p-3">{row.originalTeacherName}</td>
+                      <td className="border p-3">{row.substituteTeacherName}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section className="rounded-xl bg-white p-5 shadow">
+          <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
               <h2 className="text-xl font-bold">Daily All-Class Timetable</h2>
               <p className="text-sm text-slate-600">Select a day to see every class on one page.</p>
             </div>
@@ -930,6 +1295,12 @@ export default function Home() {
                 className="rounded-lg bg-slate-900 px-4 py-2 text-sm text-white"
               >
                 Print Day View
+              </button>
+              <button
+                onClick={downloadDailyAllClasses}
+                className="rounded-lg bg-slate-700 px-4 py-2 text-sm text-white"
+              >
+                Download CSV
               </button>
             </div>
           </div>
@@ -1001,10 +1372,22 @@ export default function Home() {
                 Print Schedule
               </button>
               <button
-                onClick={printAllTimetables}
+                onClick={downloadSelectedTimetable}
                 className="rounded-lg bg-slate-700 px-4 py-2 text-sm text-white"
               >
+                Download Schedule
+              </button>
+              <button
+                onClick={printAllTimetables}
+                className="rounded-lg bg-slate-900 px-4 py-2 text-sm text-white"
+              >
                 Print All Timetables
+              </button>
+              <button
+                onClick={downloadAllTimetables}
+                className="rounded-lg bg-slate-700 px-4 py-2 text-sm text-white"
+              >
+                Download All
               </button>
             </div>
           </div>
@@ -1136,12 +1519,20 @@ export default function Home() {
                 Filter by search, subject, or class. Print only the currently filtered teachers.
               </p>
             </div>
-            <button
-              onClick={printFilteredTeachers}
-              className="rounded-lg bg-slate-900 px-4 py-2 text-sm text-white"
-            >
-              Print Filtered Teachers
-            </button>
+            <div className="flex flex-col gap-2 md:flex-row">
+              <button
+                onClick={printFilteredTeachers}
+                className="rounded-lg bg-slate-900 px-4 py-2 text-sm text-white"
+              >
+                Print Filtered Teachers
+              </button>
+              <button
+                onClick={downloadFilteredTeachers}
+                className="rounded-lg bg-slate-700 px-4 py-2 text-sm text-white"
+              >
+                Download CSV
+              </button>
+            </div>
           </div>
 
           <div className="grid gap-4 md:grid-cols-3">
@@ -1172,13 +1563,26 @@ export default function Home() {
 
           <div className="mt-5 rounded-lg border bg-slate-50 p-4">
             <h3 className="mb-3 font-bold">Manually Add Teacher</h3>
-            <div className="grid gap-3 md:grid-cols-4">
+            <div className="grid gap-3 md:grid-cols-5">
               <input
                 value={addTeacherForm.name}
                 onChange={(e) => setAddTeacherForm({ ...addTeacherForm, name: e.target.value })}
                 placeholder="Teacher name"
                 className="rounded-lg border p-3"
               />
+              <select
+                value={addTeacherForm.gender}
+                onChange={(e) =>
+                  setAddTeacherForm({
+                    ...addTeacherForm,
+                    gender: e.target.value as "Male" | "Female",
+                  })
+                }
+                className="rounded-lg border p-3"
+              >
+                <option value="Female">Female</option>
+                <option value="Male">Male</option>
+              </select>
               <input
                 value={addTeacherForm.subjects}
                 onChange={(e) => setAddTeacherForm({ ...addTeacherForm, subjects: e.target.value })}
@@ -1211,6 +1615,7 @@ export default function Home() {
               <thead>
                 <tr>
                   <th className="border bg-slate-100 p-3 text-left">Name</th>
+                  <th className="border bg-slate-100 p-3 text-left">Gender</th>
                   <th className="border bg-slate-100 p-3 text-left">Subjects</th>
                   <th className="border bg-slate-100 p-3 text-left">Classes</th>
                   <th className="border bg-slate-100 p-3 text-left">Weekly Periods</th>
@@ -1227,6 +1632,7 @@ export default function Home() {
                     >
                       {teacher.name}
                     </td>
+                    <td className="border p-3">{teacher.gender}</td>
                     <td className="border p-3">{teacher.subjects.join(", ")}</td>
                     <td className="border p-3">{sortClasses(teacher.classes).join(", ")}</td>
                     <td className="border p-3 font-semibold">{getWeeklyClassCount(teacher.id)}</td>

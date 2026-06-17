@@ -3,6 +3,7 @@ export const schoolName = "Amaltas School";
 export type Teacher = {
   id: number;
   name: string;
+  gender: "Male" | "Female";
   subjects: string[];
   classes: string[];
   unavailable: string[];
@@ -59,9 +60,52 @@ export function cleanTeacherName(name: string) {
     .replace("Sohrab(3,Phy) + Ansari(3, Che) + Shukla(3, Bio)", "Md. Sohrab Ansari")
     .trim();
 }
+
+export function inferTeacherGender(name: string): "Male" | "Female" {
+  const lowerName = name.toLowerCase();
+  const femaleIndicators = [
+    "kumari",
+    "devi",
+    "sinha mam",
+    "mam",
+    "aarti",
+    "anjali",
+    "anita",
+    "babita",
+    "bharti",
+    "deepa",
+    "indu",
+    "kavita",
+    "kiran",
+    "manju",
+    "meena",
+    "moni",
+    "poonam",
+    "priyanka",
+    "rajnandani",
+    "rajani",
+    "ranjana",
+    "rekha",
+    "renu",
+    "ritu",
+    "sangeeta",
+    "sangita",
+    "sita",
+    "sonali",
+    "sunita",
+    "sushila",
+    "sweta",
+    "varsha",
+    "vandana",
+  ];
+
+  return femaleIndicators.some((indicator) => lowerName.includes(indicator))
+    ? "Female"
+    : "Male";
+}
 export const subjects = ["Activity", "Computer Studies", "Craft", "Craft-Music", "Cursive Writing", "Drawing", "EVS", "English", "GK", "Games", "Hindi", "IT-Music", "Library", "Maths", "Music", "PT", "PT-Yoga", "SST", "Sanskrit", "Science", "Skill Development", "Social Development", "Sulekh", "Yoga"];
 
-const rawInitialTeachers: Teacher[] = [
+const rawInitialTeachers: Omit<Teacher, "gender">[] = [
   {
     "id": 1,
     "name": "Aarti Kumari",
@@ -1015,12 +1059,17 @@ const rawInitialTeachers: Teacher[] = [
 
 export const initialTeachers: Teacher[] = rawInitialTeachers
   .filter((teacher) => !teacher.name.includes("(") && !teacher.name.includes("+"))
-  .map((teacher) => ({
-    ...teacher,
-    name: cleanTeacherName(teacher.name),
-    subjects: [...new Set(teacher.subjects)].sort((a, b) => a.localeCompare(b)),
-    classes: sortClasses([...new Set(teacher.classes)]),
-  }))
+  .map((teacher) => {
+    const cleanedName = cleanTeacherName(teacher.name);
+
+    return {
+      ...teacher,
+      name: cleanedName,
+      gender: inferTeacherGender(cleanedName),
+      subjects: [...new Set(teacher.subjects)].sort((a, b) => a.localeCompare(b)),
+      classes: sortClasses([...new Set(teacher.classes)]),
+    };
+  })
   .sort((a, b) => a.name.localeCompare(b.name));
 
 const rawTimetableEntries: TimetableEntry[] = [
