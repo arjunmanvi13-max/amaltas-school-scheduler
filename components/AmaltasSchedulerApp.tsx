@@ -6,7 +6,10 @@ import {
   updateTeacher as updateTeacherInDb,
   deleteTeacher as deleteTeacherFromDb,
   getTimetableSlots,
+  saveTimetableSlot,
   updateTimetableSlot,
+  replaceTimetableSlots,
+  replaceTeachers,
   getAbsences,
   saveAbsence,
   deleteAbsence as deleteAbsenceFromDb,
@@ -18,6 +21,7 @@ import {
 import { seedSupabaseFromLocalData } from "@/src/lib/seedSupabase";
 
 import { useEffect, useMemo, useState } from "react";
+import * as XLSX from "xlsx";
 import {
   schoolName,
   days,
@@ -88,6 +92,12 @@ type EditSlotForm = {
   period: string;
   subject: string;
   teacherName: string;
+};
+
+type ExcelImportPreview = {
+  teachers: Teacher[];
+  timetable: EditableTimetableEntry[];
+  warnings: string[];
 };
 
 const STORAGE_KEY = "amaltas-school-scheduler-data-v2";
@@ -210,6 +220,8 @@ export default function AmaltasSchedulerApp() {
     unavailable: "",
   });
   const [editSlotForm, setEditSlotForm] = useState<EditSlotForm | null>(null);
+  const [excelImportPreview, setExcelImportPreview] = useState<ExcelImportPreview | null>(null);
+  const [excelImportStatus, setExcelImportStatus] = useState("");
 
   const [dbReady, setDbReady] = useState(false);
   const [dbError, setDbError] = useState("");
@@ -1069,7 +1081,7 @@ export default function AmaltasSchedulerApp() {
   async function saveEditedSlot() {
     if (!editSlotForm) return;
 
-    const updatedSlot: EditableTimetableEntry = {
+    let updatedSlot: EditableTimetableEntry = {
       dbId: editSlotForm.dbId,
       day: editSlotForm.day,
       period: Number(editSlotForm.period),
@@ -1087,6 +1099,15 @@ export default function AmaltasSchedulerApp() {
           subject: updatedSlot.subject,
           teacher_name: updatedSlot.teacherName,
         });
+      } else {
+        const saved = await saveTimetableSlot({
+          day: updatedSlot.day,
+          period: String(updatedSlot.period),
+          class_name: updatedSlot.className,
+          subject: updatedSlot.subject,
+          teacher_name: updatedSlot.teacherName,
+        });
+        updatedSlot = { ...updatedSlot, dbId: saved.id };
       }
 
       setTimetableData((current) => {
@@ -1103,9 +1124,221 @@ export default function AmaltasSchedulerApp() {
         return sortBySchoolOrder(next) as EditableTimetableEntry[];
       });
       setEditSlotForm(null);
+      setDbError("");
     } catch (error) {
       console.warn("Could not update timetable slot", error);
       setDbError("Could not update timetable slot in Supabase.");
+    }
+  }
+
+  function normalizeExcelHeader(value: unknown) {
+    return String(value || "")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "");
+  }
+
+  function readCell(row: Record<string, unknown>, possibleHeaders: string[]) {
+    const normalizedHeaders = Object.keys(row).reduce<Record<string, string>>((acc, key) => {
+      acc[normalizeExcelHeader(key)] = key;
+      return acc;
+    }, {});
+
+    for (const header of possibleHeaders) {
+      const actualKey = normalizedHeaders[normalizeExcelHeader(header)];
+      if (actualKey && row[actualKey] !== undefined && row[actualKey] !== null) {
+        return String(row[actualKey]).trim();
+      }
+    }
+
+    return "";
+  }
+
+  function parseExcelList(value: string) {
+    return value
+      .split(/[,;|]/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  function findSheetName(workbook: XLSX.WorkBook, candidates: string[]) {
+    const normalizedCandidates = candidates.map(normalizeExcelHeader);
+    return workbook.SheetNames.find((sheetName) =>
+      normalizedCandidates.some((candidate) => normalizeExcelHeader(sheetName).includes(candidate))
+    );
+  }
+
+  function downloadExcelTemplate() {
+    const teacherRows = [
+      {
+        Name: "Example Teacher",
+        Gender: "Female",
+        Subjects: "Maths, English",
+        Classes: "I A, I B",
+        Unavailable: "Monday-3",
+        ClassTeacherFor: "I A",
+      },
+    ];
+
+    const timetableRows = [
+      {
+        Day: "Monday",
+        Period: "1",
+        Class: "I A",
+        Subject: "Maths",
+        Teacher: "Example Teacher",
+      },
+    ];
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(teacherRows), "Teachers");
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(timetableRows), "Timetable");
+    XLSX.writeFile(workbook, "amaltas-upload-template.xlsx");
+  }
+
+  async function handleExcelUpload(file: File | null) {
+    if (!file) return;
+
+    try {
+      setExcelImportStatus("Reading Excel file...");
+      const buffer = await file.arrayBuffer();
+      const workbook = XLSX.read(buffer, { type: "array" });
+      const warnings: string[] = [];
+
+      const teacherSheetName = findSheetName(workbook, ["Teachers", "Teacher Database", "Database"]);
+      const timetableSheetName = findSheetName(workbook, ["Timetable", "Schedule", "Routine"]);
+
+      if (!teacherSheetName) warnings.push("No Teachers sheet found. Teacher database will not be replaced.");
+      if (!timetableSheetName) warnings.push("No Timetable sheet found. Timetable will not be replaced.");
+
+      const teacherRows = teacherSheetName
+        ? (XLSX.utils.sheet_to_json(workbook.Sheets[teacherSheetName]) as Record<string, unknown>[])
+        : [];
+      const timetableRows = timetableSheetName
+        ? (XLSX.utils.sheet_to_json(workbook.Sheets[timetableSheetName]) as Record<string, unknown>[])
+        : [];
+
+      const parsedTeachers = teacherRows
+        .map((row, index) => {
+          const name = readCell(row, ["Name", "Teacher", "Teacher Name"]);
+          if (!name) return null;
+          const genderValue = readCell(row, ["Gender"]);
+          const gender: "Male" | "Female" = genderValue.toLowerCase().startsWith("m") ? "Male" : "Female";
+
+          return {
+            id: Date.now() + index,
+            name,
+            gender,
+            subjects: parseExcelList(readCell(row, ["Subjects", "Subject"])),
+            classes: sortClasses(parseExcelList(readCell(row, ["Classes", "Class", "Standards", "Standard"]))),
+            unavailable: parseExcelList(readCell(row, ["Unavailable", "Availability", "Unavailable Slots"])),
+            class_teacher_for: parseExcelList(readCell(row, ["ClassTeacherFor", "Class Teacher For", "Class Teacher"])),
+          } as Teacher;
+        })
+        .filter(Boolean) as Teacher[];
+
+      const parsedTimetable = timetableRows
+        .map((row, index) => {
+          const day = readCell(row, ["Day"]);
+          const period = readCell(row, ["Period"]);
+          const className = readCell(row, ["Class", "Class Name", "Standard"]);
+          const subject = readCell(row, ["Subject"]);
+          const teacherName = readCell(row, ["Teacher", "Teacher Name"]);
+
+          if (!day || !period || !className) return null;
+
+          return {
+            day,
+            period: Number(String(period).replace(/[^0-9]/g, "")) || 1,
+            className,
+            subject: subject || "Free",
+            teacherName: teacherName || "Free",
+          } as EditableTimetableEntry;
+        })
+        .filter(Boolean) as EditableTimetableEntry[];
+
+      setExcelImportPreview({
+        teachers: parsedTeachers,
+        timetable: sortBySchoolOrder(parsedTimetable) as EditableTimetableEntry[],
+        warnings,
+      });
+      setExcelImportStatus("Preview ready. Review counts, then confirm import.");
+    } catch (error) {
+      console.warn("Could not parse Excel file", error);
+      setExcelImportStatus("Could not read this Excel file. Use the template format and try again.");
+    }
+  }
+
+  async function confirmExcelImport() {
+    if (!excelImportPreview) return;
+
+    const confirmed = window.confirm(
+      "Replace the current teacher database and timetable with this Excel import? This affects all devices."
+    );
+    if (!confirmed) return;
+
+    try {
+      setExcelImportStatus("Saving import to Supabase...");
+
+      if (excelImportPreview.teachers.length > 0) {
+        const savedTeachers = await replaceTeachers(
+          excelImportPreview.teachers.map((teacher) => ({
+            name: teacher.name,
+            gender: teacher.gender || inferTeacherGender(teacher.name),
+            subjects: teacher.subjects || [],
+            classes: teacher.classes || [],
+            unavailable: teacher.unavailable || [],
+            class_teacher_for: teacher.class_teacher_for || [],
+          }))
+        );
+
+        setTeachers(
+          savedTeachers.map((teacher, index) => ({
+            id: index + 1,
+            dbId: teacher.id,
+            name: teacher.name,
+            gender: teacher.gender || inferTeacherGender(teacher.name),
+            subjects: teacher.subjects || [],
+            classes: teacher.classes || [],
+            unavailable: teacher.unavailable || [],
+            class_teacher_for: teacher.class_teacher_for || [],
+          }))
+        );
+      }
+
+      if (excelImportPreview.timetable.length > 0) {
+        const savedSlots = await replaceTimetableSlots(
+          excelImportPreview.timetable.map((slot) => ({
+            day: slot.day,
+            period: String(slot.period),
+            class_name: slot.className,
+            subject: slot.subject,
+            teacher_name: slot.teacherName,
+          }))
+        );
+
+        setTimetableData(
+          sortBySchoolOrder(
+            savedSlots.map((slot) => ({
+              dbId: slot.id,
+              day: slot.day,
+              period: Number(slot.period),
+              className: slot.class_name,
+              subject: slot.subject,
+              teacherName: slot.teacher_name,
+            }))
+          ) as EditableTimetableEntry[]
+        );
+      }
+
+      setAbsences([]);
+      setCoverAssignments([]);
+      setCoverRequest(null);
+      setExcelImportPreview(null);
+      setExcelImportStatus("Import complete. Supabase data updated across devices.");
+    } catch (error) {
+      console.warn("Could not save Excel import", error);
+      setExcelImportStatus("Import failed while saving to Supabase.");
     }
   }
 
@@ -1670,6 +1903,45 @@ export default function AmaltasSchedulerApp() {
         </section>
 
         <section className="rounded-xl bg-white p-5 shadow">
+          <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+            <div>
+              <h2 className="text-xl font-bold">School Data Upload</h2>
+              <p className="mt-1 text-sm text-slate-600">Upload a locked-format Excel workbook to replace the teacher database and timetable across devices.</p>
+              <p className="mt-2 text-xs text-slate-500">Expected sheets: <strong>Teachers</strong> and <strong>Timetable</strong>. Use Download Template if needed.</p>
+            </div>
+            <div className="flex flex-col gap-2 md:min-w-72">
+              <button onClick={downloadExcelTemplate} className="rounded-lg bg-slate-700 px-4 py-2 text-sm text-white">Download Excel Template</button>
+              <input
+                type="file"
+                accept=".xlsx,.xls"
+                onChange={(event) => handleExcelUpload(event.target.files?.[0] || null)}
+                className="rounded-lg border p-2 text-sm"
+              />
+            </div>
+          </div>
+          {excelImportStatus && <p className="mt-3 rounded-lg bg-slate-50 p-3 text-sm text-slate-700">{excelImportStatus}</p>}
+          {excelImportPreview && (
+            <div className="mt-4 rounded-lg border p-4">
+              <h3 className="font-bold">Import Preview</h3>
+              <div className="mt-3 grid gap-3 md:grid-cols-3">
+                <Card title="Teachers Found" value={excelImportPreview.teachers.length.toString()} />
+                <Card title="Timetable Slots Found" value={excelImportPreview.timetable.length.toString()} />
+                <Card title="Warnings" value={excelImportPreview.warnings.length.toString()} />
+              </div>
+              {excelImportPreview.warnings.length > 0 && (
+                <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-amber-700">
+                  {excelImportPreview.warnings.map((warning) => <li key={warning}>{warning}</li>)}
+                </ul>
+              )}
+              <div className="mt-4 flex gap-2">
+                <button onClick={confirmExcelImport} className="rounded-lg bg-red-700 px-4 py-2 text-sm text-white">Confirm Replace Current Data</button>
+                <button onClick={() => setExcelImportPreview(null)} className="rounded-lg bg-slate-100 px-4 py-2 text-sm">Cancel Import</button>
+              </div>
+            </div>
+          )}
+        </section>
+
+        <section className="rounded-xl bg-white p-5 shadow">
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
               <h2 className="text-xl font-bold">Today&apos;s Problems</h2>
@@ -2180,37 +2452,47 @@ export default function AmaltasSchedulerApp() {
 
 
         {editSlotForm && (
-          <section className="rounded-xl bg-white p-5 shadow">
-            <h2 className="mb-4 text-xl font-bold">Edit Timetable Slot</h2>
-            <p className="mb-3 text-sm text-slate-600">Update the teacher or subject for this class period. This saves to Supabase when the slot came from the database.</p>
-            <div className="grid gap-3 md:grid-cols-5">
-              <ReadOnlyField label="Class" value={editSlotForm.className} />
-              <ReadOnlyField label="Day" value={formatSchoolDay(editSlotForm.day)} />
-              <ReadOnlyField label="Period" value={`Period ${editSlotForm.period}`} />
-              <input
-                value={editSlotForm.subject}
-                onChange={(e) => setEditSlotForm({ ...editSlotForm, subject: e.target.value })}
-                placeholder="Subject"
-                className="rounded-lg border p-3"
-              />
-              <select
-                value={editSlotForm.teacherName}
-                onChange={(e) => setEditSlotForm({ ...editSlotForm, teacherName: e.target.value })}
-                className="rounded-lg border p-3"
-              >
-                <option value="Free">Free</option>
-                {teachers.map((teacher) => (
-                  <option key={teacher.id} value={teacher.name}>
-                    {teacher.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="mt-3 flex gap-2">
-              <button onClick={saveEditedSlot} className="rounded-lg bg-slate-900 px-4 py-2 text-sm text-white">Save Slot</button>
-              <button onClick={() => setEditSlotForm(null)} className="rounded-lg bg-slate-100 px-4 py-2 text-sm">Cancel</button>
-            </div>
-          </section>
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+            <section className="w-full max-w-4xl rounded-xl bg-white p-5 shadow-2xl">
+              <h2 className="mb-2 text-xl font-bold">Edit Timetable Slot</h2>
+              <p className="mb-4 text-sm text-slate-600">Change the subject or teacher for this exact class period. Saving updates Supabase and all devices.</p>
+              <div className="grid gap-3 md:grid-cols-3">
+                <ReadOnlyField label="Class" value={editSlotForm.className} />
+                <ReadOnlyField label="Day" value={formatSchoolDay(editSlotForm.day)} />
+                <ReadOnlyField label="Period" value={`Period ${editSlotForm.period}`} />
+              </div>
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                <label className="space-y-1">
+                  <span className="text-sm font-medium">Subject</span>
+                  <input
+                    value={editSlotForm.subject}
+                    onChange={(e) => setEditSlotForm({ ...editSlotForm, subject: e.target.value })}
+                    placeholder="Subject"
+                    className="w-full rounded-lg border p-3"
+                  />
+                </label>
+                <label className="space-y-1">
+                  <span className="text-sm font-medium">Teacher</span>
+                  <select
+                    value={editSlotForm.teacherName}
+                    onChange={(e) => setEditSlotForm({ ...editSlotForm, teacherName: e.target.value })}
+                    className="w-full rounded-lg border p-3"
+                  >
+                    <option value="Free">Free</option>
+                    {teachers.map((teacher) => (
+                      <option key={teacher.id} value={teacher.name}>
+                        {teacher.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <div className="mt-5 flex flex-wrap gap-2">
+                <button onClick={saveEditedSlot} className="rounded-lg bg-slate-900 px-4 py-2 text-sm text-white">Save Slot</button>
+                <button onClick={() => setEditSlotForm(null)} className="rounded-lg bg-slate-100 px-4 py-2 text-sm">Cancel</button>
+              </div>
+            </section>
+          </div>
         )}
         <section className="rounded-xl bg-white p-5 shadow">
           <h2 className="mb-4 text-xl font-bold">Teacher Schedule View</h2>
@@ -2246,9 +2528,7 @@ export default function AmaltasSchedulerApp() {
 
                   return (
                     <div key={day}>
-                      <h4 className="mb-2 font-bold text-slate-700">
-  {formatSchoolDay(day)}
-</h4>
+                      <h4 className="mb-2 font-bold text-slate-700">{formatSchoolDay(day)}</h4>
                       <div className="grid gap-3 md:grid-cols-3">
                         {items.map((item) => (
                           <div

@@ -63,6 +63,18 @@ export async function deleteTeacher(id: string) {
   if (error) throw error;
 }
 
+export async function replaceTeachers(teachers: DbTeacher[]) {
+  const { error: deleteError } = await supabase
+    .from("teachers")
+    .delete()
+    .neq("id", "00000000-0000-0000-0000-000000000000");
+  if (deleteError) throw deleteError;
+  if (!teachers.length) return [];
+  const { data, error } = await supabase.from("teachers").insert(teachers).select();
+  if (error) throw error;
+  return data as DbTeacher[];
+}
+
 export async function getTimetableSlots() {
   const { data, error } = await supabase.from("timetable_slots").select("*");
   if (error) throw error;

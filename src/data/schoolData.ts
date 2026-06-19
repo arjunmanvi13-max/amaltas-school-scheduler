@@ -8,6 +8,7 @@ export type Teacher = {
   subjects: string[];
   classes: string[];
   unavailable: string[];
+  class_teacher_for?: string[];
 };
 
 export type TimetableEntry = {
