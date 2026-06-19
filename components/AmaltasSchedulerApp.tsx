@@ -3,7 +3,10 @@
 import {
   getTeachers,
   saveTeacher,
+  updateTeacher as updateTeacherInDb,
   deleteTeacher as deleteTeacherFromDb,
+  getTimetableSlots,
+  updateTimetableSlot,
   getAbsences,
   saveAbsence,
   deleteAbsence as deleteAbsenceFromDb,
@@ -32,17 +35,21 @@ import {
 
 type Absence = {
   id: number;
+  dbId?: string;
   teacherId: number;
   day: string;
+  date?: string;
   startPeriod: string;
   endPeriod: string;
 };
 
 type CoverAssignment = {
   id: number;
+  dbId?: string;
   absentTeacherId: number;
   coverTeacherId: number;
   day: string;
+  date?: string;
   period: string;
   className: string;
   subject: string;
@@ -51,6 +58,7 @@ type CoverAssignment = {
 type CoverRequest = {
   absentTeacherId: number;
   day: string;
+  date?: string;
   period: string;
   className: string;
   subject: string;
@@ -62,6 +70,24 @@ type AddTeacherForm = {
   subjects: string;
   classes: string;
   unavailable: string;
+};
+
+type EditableTimetableEntry = {
+  dbId?: string;
+  className: string;
+  teacherName: string;
+  subject: string;
+  period: number;
+  day: string;
+};
+
+type EditSlotForm = {
+  dbId?: string;
+  className: string;
+  day: string;
+  period: string;
+  subject: string;
+  teacherName: string;
 };
 
 const STORAGE_KEY = "amaltas-school-scheduler-data-v2";
@@ -107,6 +133,33 @@ function formatSchoolDay(day: string) {
   return formatFullDate(getDateForSchoolDay(day));
 }
 
+function getSchoolDayFromDateKey(dateKey: string) {
+  return new Intl.DateTimeFormat("en-US", { weekday: "long" }).format(new Date(`${dateKey}T12:00:00`));
+}
+
+function formatDateKey(dateKey: string) {
+  return formatFullDate(new Date(`${dateKey}T12:00:00`));
+}
+
+function getDateKeysInRange(startDate: string, endDate: string) {
+  const start = new Date(`${startDate}T12:00:00`);
+  const end = new Date(`${endDate}T12:00:00`);
+  const dates: string[] = [];
+
+  for (const cursor = new Date(start); cursor <= end; cursor.setDate(cursor.getDate() + 1)) {
+    const dayName = new Intl.DateTimeFormat("en-US", { weekday: "long" }).format(cursor);
+    if (days.includes(dayName)) {
+      dates.push(cursor.toISOString().slice(0, 10));
+    }
+  }
+
+  return dates;
+}
+
+function getComparableDateKey(dateKey?: string) {
+  return dateKey || getTodayKey();
+}
+
 export default function AmaltasSchedulerApp() {
   const todayKey = getTodayKey();
   const todayDayName = days.includes(getTodayDayName()) ? getTodayDayName() : days[0];
@@ -117,9 +170,12 @@ export default function AmaltasSchedulerApp() {
   const [adminLoginError, setAdminLoginError] = useState("");
   const [selectedTeacherViewId, setSelectedTeacherViewId] = useState(initialTeachers[0]?.id || 1);
   const [teachers, setTeachers] = useState<Teacher[]>(initialTeachers);
+  const [timetableData, setTimetableData] = useState<EditableTimetableEntry[]>(timetableEntries);
   const [selectedClass, setSelectedClass] = useState(standards[0] || "NUR A");
   const [selectedDailyViewDay, setSelectedDailyViewDay] = useState(todayDayName);
   const [selectedAbsenceDay, setSelectedAbsenceDay] = useState(todayDayName);
+  const [selectedAbsenceStartDate, setSelectedAbsenceStartDate] = useState(todayKey);
+  const [selectedAbsenceEndDate, setSelectedAbsenceEndDate] = useState(todayKey);
   const [selectedAbsenceStartPeriod, setSelectedAbsenceStartPeriod] = useState(periods[0] || "1");
   const [selectedAbsenceEndPeriod, setSelectedAbsenceEndPeriod] = useState(periods[periods.length - 1] || "8");
   const [selectedAbsentTeacherId, setSelectedAbsentTeacherId] = useState(
@@ -145,9 +201,18 @@ export default function AmaltasSchedulerApp() {
     classes: "",
     unavailable: "",
   });
+  const [editingTeacherId, setEditingTeacherId] = useState<number | null>(null);
+  const [editTeacherForm, setEditTeacherForm] = useState<AddTeacherForm>({
+    name: "",
+    gender: "Female",
+    subjects: "",
+    classes: "",
+    unavailable: "",
+  });
+  const [editSlotForm, setEditSlotForm] = useState<EditSlotForm | null>(null);
 
   const [dbReady, setDbReady] = useState(false);
-const [dbError, setDbError] = useState("");
+  const [dbError, setDbError] = useState("");
 
   useEffect(() => {
     try {
@@ -183,6 +248,9 @@ const [dbError, setDbError] = useState("");
           setCoverAssignments([]);
         }
 
+        if (Array.isArray(parsed.timetableData) && parsed.timetableData.length > 0) {
+          setTimetableData(parsed.timetableData);
+        }
         if (typeof parsed.selectedClass === "string") {
           setSelectedClass(parsed.selectedClass);
         }
@@ -205,9 +273,10 @@ const [dbError, setDbError] = useState("");
         absences,
         coverAssignments,
         selectedClass,
+        timetableData,
       })
     );
-  }, [teachers, absences, coverAssignments, selectedClass, storageReady, todayKey]);
+  }, [teachers, timetableData, absences, coverAssignments, selectedClass, storageReady, todayKey]);
 
   useEffect(() => {
     function handleStorageChange(event: StorageEvent) {
@@ -217,6 +286,9 @@ const [dbError, setDbError] = useState("");
         const parsed = JSON.parse(event.newValue);
         if (Array.isArray(parsed.teachers) && parsed.teachers.length > 0) {
           setTeachers(parsed.teachers);
+        }
+        if (Array.isArray(parsed.timetableData) && parsed.timetableData.length > 0) {
+          setTimetableData(parsed.timetableData);
         }
         if (parsed.savedDate === todayKey) {
           setAbsences(Array.isArray(parsed.absences) ? parsed.absences : []);
@@ -241,14 +313,17 @@ const [dbError, setDbError] = useState("");
 
       await seedSupabaseFromLocalData();
 
-      const [dbTeachers, dbAbsences, dbCovers] = await Promise.all([
+      const [dbTeachers, dbSlots, dbAbsences, dbCovers] = await Promise.all([
         getTeachers(),
+        getTimetableSlots(),
         getAbsences(),
         getCoverAssignments(),
       ]);
 
+      let convertedTeachers = teachers;
+
       if (dbTeachers.length > 0) {
-        const convertedTeachers = dbTeachers.map((teacher, index) => ({
+        convertedTeachers = dbTeachers.map((teacher, index) => ({
           id: index + 1,
           dbId: teacher.id,
           name: teacher.name,
@@ -268,48 +343,65 @@ const [dbError, setDbError] = useState("");
         }
       }
 
-      const todayAbsences = dbAbsences.filter((absence) => {
-        return todayKey >= absence.start_date && todayKey <= absence.end_date;
-      });
+      if (dbSlots.length > 0) {
+        setTimetableData(
+          sortBySchoolOrder(
+            dbSlots.map((slot) => ({
+              dbId: slot.id,
+              day: slot.day,
+              period: Number(slot.period),
+              className: slot.class_name,
+              subject: slot.subject,
+              teacherName: slot.teacher_name,
+            }))
+          ) as EditableTimetableEntry[]
+        );
+      }
+
+      const activeAbsenceRows = dbAbsences.filter((absence) => todayKey <= absence.end_date);
 
       setAbsences(
-        todayAbsences.map((absence, index) => {
-          const matchingTeacher = teachers.find(
-            (teacher) => teacher.name === absence.teacher_name
+        activeAbsenceRows.flatMap((absence, index) => {
+          const matchingTeacher = convertedTeachers.find(
+            (teacher) => normalizeName(teacher.name) === normalizeName(absence.teacher_name)
           );
+          if (!matchingTeacher) return [];
 
-          return {
-            id: index + 1,
+          return getDateKeysInRange(absence.start_date, absence.end_date).map((dateKey, dayIndex) => ({
+            id: index * 1000 + dayIndex + 1,
             dbId: absence.id,
-            teacherId: matchingTeacher?.id || 0,
-            day: selectedAbsenceDay,
+            teacherId: matchingTeacher.id,
+            day: getSchoolDayFromDateKey(dateKey),
+            date: dateKey,
             startPeriod: absence.start_period,
             endPeriod: absence.end_period,
-          };
+          }));
         })
       );
 
-      const todayCovers = dbCovers.filter((cover) => cover.date === todayKey);
+      const activeCovers = dbCovers.filter((cover) => cover.date >= todayKey);
 
       setCoverAssignments(
-        todayCovers.map((cover, index) => {
-          const absentTeacher = teachers.find(
-            (teacher) => teacher.name === cover.absent_teacher_name
+        activeCovers.flatMap((cover, index) => {
+          const absentTeacher = convertedTeachers.find(
+            (teacher) => normalizeName(teacher.name) === normalizeName(cover.absent_teacher_name)
           );
-          const coverTeacher = teachers.find(
-            (teacher) => teacher.name === cover.cover_teacher_name
+          const coverTeacher = convertedTeachers.find(
+            (teacher) => normalizeName(teacher.name) === normalizeName(cover.cover_teacher_name)
           );
+          if (!absentTeacher || !coverTeacher) return [];
 
-          return {
+          return [{
             id: index + 1,
             dbId: cover.id,
-            absentTeacherId: absentTeacher?.id || 0,
-            coverTeacherId: coverTeacher?.id || 0,
+            absentTeacherId: absentTeacher.id,
+            coverTeacherId: coverTeacher.id,
             day: cover.day,
+            date: cover.date,
             period: cover.period,
             className: cover.class_name,
             subject: cover.subject,
-          };
+          }];
         })
       );
 
@@ -386,7 +478,7 @@ const [dbError, setDbError] = useState("");
   }
 
   function getEntryForSlot(day: string, period: string, className: string) {
-    return timetableEntries.find(
+    return timetableData.find(
       (entry) =>
         entry.day === day &&
         entry.period.toString() === period &&
@@ -404,12 +496,12 @@ const [dbError, setDbError] = useState("");
     return entry?.subject || "Free";
   }
 
-  function getAffectedClassesForTeacher(teacherId: number, day: string, startPeriod = periods[0] || "1", endPeriod = periods[periods.length - 1] || "8") {
+  function getAffectedClassesForTeacher(teacherId: number, day: string, startPeriod = periods[0] || "1", endPeriod = periods[periods.length - 1] || "8", date?: string) {
     const teacher = teachers.find((item) => item.id === teacherId);
     if (!teacher) return [];
 
     return sortBySchoolOrder(
-      timetableEntries
+      timetableData
         .filter(
           (entry) =>
             entry.day === day &&
@@ -418,6 +510,7 @@ const [dbError, setDbError] = useState("");
         )
         .map((entry) => ({
           day: entry.day,
+          date,
           period: entry.period.toString(),
           className: entry.className,
           subject: entry.subject,
@@ -431,7 +524,7 @@ const [dbError, setDbError] = useState("");
     if (!teacher) return [];
 
     return sortBySchoolOrder(
-      timetableEntries
+      timetableData
         .filter((entry) => normalizeName(entry.teacherName) === normalizeName(teacher.name))
         .map((entry) => ({
           day: entry.day,
@@ -446,7 +539,7 @@ const [dbError, setDbError] = useState("");
     const teacher = teachers.find((item) => item.id === teacherId);
     if (!teacher) return 0;
 
-    return timetableEntries.filter(
+    return timetableData.filter(
       (entry) => normalizeName(entry.teacherName) === normalizeName(teacher.name)
     ).length;
   }
@@ -456,7 +549,7 @@ const [dbError, setDbError] = useState("");
   }
 
   function isTeacherAlreadyTeaching(teacher: Teacher, day: string, period: string) {
-    return timetableEntries.some(
+    return timetableData.some(
       (entry) =>
         entry.day === day &&
         entry.period.toString() === period &&
@@ -522,22 +615,34 @@ const [dbError, setDbError] = useState("");
       )
     : null;
 
-  const affectedClassesForSelectedAbsence =
+  const selectedAbsenceRecords =
     selectedAbsentTeacher && selectedAbsenceRecord
-      ? getAffectedClassesForTeacher(
-          selectedAbsentTeacher.id,
-          selectedAbsenceDay,
-          selectedAbsenceRecord.startPeriod,
-          selectedAbsenceRecord.endPeriod
+      ? absences.filter(
+          (absence) =>
+            absence.teacherId === selectedAbsentTeacher.id &&
+            (selectedAbsenceRecord.dbId
+              ? absence.dbId === selectedAbsenceRecord.dbId
+              : absence.day === selectedAbsenceDay)
         )
       : [];
+
+  const affectedClassesForSelectedAbsence = selectedAbsenceRecords.flatMap((absence) =>
+    getAffectedClassesForTeacher(
+      absence.teacherId,
+      absence.day,
+      absence.startPeriod,
+      absence.endPeriod,
+      absence.date
+    )
+  );
 
   const allAffectedPeriods = absences.flatMap((absence) =>
     getAffectedClassesForTeacher(
       absence.teacherId,
       absence.day,
       absence.startPeriod,
-      absence.endPeriod
+      absence.endPeriod,
+      absence.date
     )
   );
 
@@ -612,11 +717,13 @@ const [dbError, setDbError] = useState("");
         absence.teacherId,
         absence.day,
         absence.startPeriod,
-        absence.endPeriod
+        absence.endPeriod,
+        absence.date
       ).map((item) => {
         const coverAssignment = coverAssignments.find(
           (assignment) =>
             assignment.day === item.day &&
+            (assignment.date || "") === (absence.date || "") &&
             assignment.period === item.period &&
             assignment.className === item.className &&
             assignment.absentTeacherId === absence.teacherId
@@ -627,6 +734,7 @@ const [dbError, setDbError] = useState("");
 
         return {
           day: item.day,
+          date: item.date,
           period: item.period,
           className: item.className,
           subject: item.subject,
@@ -637,6 +745,7 @@ const [dbError, setDbError] = useState("");
     })
   ) as {
     day: string;
+    date?: string;
     period: string;
     className: string;
     subject: string;
@@ -684,63 +793,82 @@ const [dbError, setDbError] = useState("");
     setAdminLoginError("Incorrect password. Try amaltas123 for now.");
   }
 
-  function markTeacherAbsent() {
+  async function markTeacherAbsent() {
     const teacherId = Number(selectedAbsentTeacherId);
+    const teacher = teachers.find((item) => item.id === teacherId);
+    if (!teacher) return;
+
     const startPeriod = Math.min(Number(selectedAbsenceStartPeriod), Number(selectedAbsenceEndPeriod)).toString();
     const endPeriod = Math.max(Number(selectedAbsenceStartPeriod), Number(selectedAbsenceEndPeriod)).toString();
-    const alreadyMarked = absences.some(
-      (absence) => absence.teacherId === teacherId && absence.day === selectedAbsenceDay
-    );
+    const startDate = selectedAbsenceStartDate <= selectedAbsenceEndDate ? selectedAbsenceStartDate : selectedAbsenceEndDate;
+    const endDate = selectedAbsenceStartDate <= selectedAbsenceEndDate ? selectedAbsenceEndDate : selectedAbsenceStartDate;
 
-    if (alreadyMarked) {
-      setAbsences(
-        absences.map((absence) =>
-          absence.teacherId === teacherId && absence.day === selectedAbsenceDay
-            ? {
-                ...absence,
-                startPeriod,
-                endPeriod,
-              }
-            : absence
-        )
-      );
-      return;
-    }
+    try {
+      const saved = await saveAbsence({
+        teacher_name: teacher.name,
+        start_date: startDate,
+        end_date: endDate,
+        start_period: startPeriod,
+        end_period: endPeriod,
+        reason: "",
+      });
 
-    setAbsences([
-      ...absences,
-      {
-        id: Date.now(),
+      const newAbsences = getDateKeysInRange(startDate, endDate).map((dateKey, index) => ({
+        id: Date.now() + index,
+        dbId: saved.id,
         teacherId,
-        day: selectedAbsenceDay,
+        day: getSchoolDayFromDateKey(dateKey),
+        date: dateKey,
         startPeriod,
         endPeriod,
-      },
-    ]);
+      }));
+
+      setAbsences((current) => {
+        const filtered = current.filter(
+          (absence) =>
+            !(absence.teacherId === teacherId && absence.date && absence.date >= startDate && absence.date <= endDate)
+        );
+        return sortBySchoolOrder([...filtered, ...newAbsences]) as Absence[];
+      });
+      setSelectedAbsenceDay(getSchoolDayFromDateKey(startDate));
+    } catch (error) {
+      console.warn("Could not save absence to Supabase", error);
+      setDbError("Could not save absence to Supabase. Check connection and policies.");
+    }
   }
 
-  function removeAbsence(id: number) {
+  async function removeAbsence(id: number) {
     const removed = absences.find((absence) => absence.id === id);
-    setAbsences(absences.filter((absence) => absence.id !== id));
+    if (!removed) return;
 
-    if (removed) {
-      setCoverAssignments(
-        coverAssignments.filter(
-          (assignment) =>
-            !(
-              assignment.absentTeacherId === removed.teacherId &&
-              assignment.day === removed.day &&
-              isPeriodInRange(assignment.period, removed.startPeriod, removed.endPeriod)
-            )
-        )
-      );
+    const sameDbAbsences = removed.dbId
+      ? absences.filter((absence) => absence.dbId === removed.dbId)
+      : [removed];
+
+    const removedDates = sameDbAbsences.map((absence) => absence.date || todayKey);
+
+    setAbsences(absences.filter((absence) => (removed.dbId ? absence.dbId !== removed.dbId : absence.id !== id)));
+
+    const coversToRemove = coverAssignments.filter(
+      (assignment) =>
+        assignment.absentTeacherId === removed.teacherId &&
+        removedDates.includes(assignment.date || todayKey) &&
+        isPeriodInRange(assignment.period, removed.startPeriod, removed.endPeriod)
+    );
+
+    setCoverAssignments(
+      coverAssignments.filter((assignment) => !coversToRemove.some((cover) => cover.id === assignment.id))
+    );
+
+    try {
+      if (removed.dbId) await deleteAbsenceFromDb(removed.dbId);
+      await Promise.all(coversToRemove.filter((cover) => cover.dbId).map((cover) => deleteCoverAssignmentFromDb(cover.dbId!)));
+    } catch (error) {
+      console.warn("Could not remove absence from Supabase", error);
+      setDbError("Could not remove absence from Supabase.");
     }
 
-    if (
-      removed &&
-      coverRequest?.absentTeacherId === removed.teacherId &&
-      coverRequest.day === removed.day
-    ) {
+    if (removed && coverRequest?.absentTeacherId === removed.teacherId) {
       setCoverRequest(null);
     }
   }
@@ -750,37 +878,68 @@ const [dbError, setDbError] = useState("");
     setSelectedClass(request.className);
   }
 
-  function assignCover(coverTeacherId: number) {
+  async function assignCover(coverTeacherId: number) {
     if (!coverRequest) return;
+
+    const absentTeacher = teachers.find((teacher) => teacher.id === coverRequest.absentTeacherId);
+    const coverTeacher = teachers.find((teacher) => teacher.id === coverTeacherId);
+    if (!absentTeacher || !coverTeacher) return;
 
     const alreadyAssigned = coverAssignments.some(
       (assignment) =>
         assignment.day === coverRequest.day &&
+        (assignment.date || "") === (coverRequest.date || "") &&
         assignment.period === coverRequest.period &&
         assignment.className === coverRequest.className
     );
 
     if (alreadyAssigned) return;
 
-    setCoverAssignments([
-      ...coverAssignments,
-      {
-        id: Date.now(),
-        absentTeacherId: coverRequest.absentTeacherId,
-        coverTeacherId,
+    try {
+      const saved = await saveCoverAssignment({
+        absent_teacher_name: absentTeacher.name,
+        cover_teacher_name: coverTeacher.name,
         day: coverRequest.day,
+        date: coverRequest.date || todayKey,
         period: coverRequest.period,
-        className: coverRequest.className,
+        class_name: coverRequest.className,
         subject: coverRequest.subject,
-      },
-    ]);
+      });
+
+      setCoverAssignments([
+        ...coverAssignments,
+        {
+          id: Date.now(),
+          dbId: saved.id,
+          absentTeacherId: coverRequest.absentTeacherId,
+          coverTeacherId,
+          day: coverRequest.day,
+          date: coverRequest.date || todayKey,
+          period: coverRequest.period,
+          className: coverRequest.className,
+          subject: coverRequest.subject,
+        },
+      ]);
+    } catch (error) {
+      console.warn("Could not save cover assignment", error);
+      setDbError("Could not save cover assignment to Supabase.");
+    }
   }
 
-  function removeCoverAssignment(id: number) {
+  async function removeCoverAssignment(id: number) {
+    const removed = coverAssignments.find((assignment) => assignment.id === id);
     setCoverAssignments(coverAssignments.filter((assignment) => assignment.id !== id));
+
+    try {
+      if (removed?.dbId) await deleteCoverAssignmentFromDb(removed.dbId);
+    } catch (error) {
+      console.warn("Could not remove cover assignment", error);
+      setDbError("Could not remove cover assignment from Supabase.");
+    }
   }
 
-  function removeTeacher(teacherId: number) {
+  async function removeTeacher(teacherId: number) {
+    const removedTeacher = teachers.find((teacher) => teacher.id === teacherId);
     const remainingTeachers = teachers.filter((teacher) => teacher.id !== teacherId);
 
     setTeachers(remainingTeachers);
@@ -791,6 +950,13 @@ const [dbError, setDbError] = useState("");
           assignment.absentTeacherId !== teacherId && assignment.coverTeacherId !== teacherId
       )
     );
+
+    try {
+      if (removedTeacher?.dbId) await deleteTeacherFromDb(removedTeacher.dbId);
+    } catch (error) {
+      console.warn("Could not remove teacher from Supabase", error);
+      setDbError("Could not remove teacher from Supabase.");
+    }
 
     if (coverRequest?.absentTeacherId === teacherId) {
       setCoverRequest(null);
@@ -805,26 +971,142 @@ const [dbError, setDbError] = useState("");
     }
   }
 
-  function addTeacher() {
+  async function addTeacher() {
     const name = addTeacherForm.name.trim();
     if (!name) return;
 
     const duplicate = teachers.some((teacher) => normalizeName(teacher.name) === normalizeName(name));
     if (duplicate) return;
 
-    const newTeacher: Teacher = {
-      id: Date.now(),
+    const baseTeacher = {
       name,
       gender: addTeacherForm.gender || inferTeacherGender(name),
       subjects: splitList(addTeacherForm.subjects),
       classes: sortClasses(splitList(addTeacherForm.classes)),
       unavailable: splitList(addTeacherForm.unavailable),
+      class_teacher_for: [],
     };
 
-    setTeachers([...teachers, newTeacher].sort((a, b) => a.name.localeCompare(b.name)));
-    setSelectedTeacherProfileId(newTeacher.id);
-    setSelectedAbsentTeacherId(newTeacher.id.toString());
-    setAddTeacherForm({ name: "", gender: "Female", subjects: "", classes: "", unavailable: "" });
+    try {
+      const saved = await saveTeacher(baseTeacher);
+      const newTeacher: Teacher = {
+        id: Date.now(),
+        dbId: saved.id,
+        name: saved.name,
+        gender: saved.gender || inferTeacherGender(saved.name),
+        subjects: saved.subjects || [],
+        classes: sortClasses(saved.classes || []),
+        unavailable: saved.unavailable || [],
+      };
+
+      setTeachers([...teachers, newTeacher].sort((a, b) => a.name.localeCompare(b.name)));
+      setSelectedTeacherProfileId(newTeacher.id);
+      setSelectedAbsentTeacherId(newTeacher.id.toString());
+      setAddTeacherForm({ name: "", gender: "Female", subjects: "", classes: "", unavailable: "" });
+    } catch (error) {
+      console.warn("Could not add teacher", error);
+      setDbError("Could not add teacher to Supabase.");
+    }
+  }
+
+  function startEditTeacher(teacher: Teacher) {
+    setEditingTeacherId(teacher.id);
+    setEditTeacherForm({
+      name: teacher.name,
+      gender: teacher.gender || inferTeacherGender(teacher.name),
+      subjects: teacher.subjects.join(", "),
+      classes: teacher.classes.join(", "),
+      unavailable: teacher.unavailable.join(", "),
+    });
+  }
+
+  async function saveEditedTeacher() {
+    if (!editingTeacherId) return;
+    const teacher = teachers.find((item) => item.id === editingTeacherId);
+    if (!teacher) return;
+
+    const updatedTeacher: Teacher = {
+      ...teacher,
+      name: editTeacherForm.name.trim(),
+      gender: editTeacherForm.gender,
+      subjects: splitList(editTeacherForm.subjects),
+      classes: sortClasses(splitList(editTeacherForm.classes)),
+      unavailable: splitList(editTeacherForm.unavailable),
+    };
+
+    try {
+      if (teacher.dbId) {
+        const saved = await updateTeacherInDb(teacher.dbId, {
+          name: updatedTeacher.name,
+          gender: updatedTeacher.gender,
+          subjects: updatedTeacher.subjects,
+          classes: updatedTeacher.classes,
+          unavailable: updatedTeacher.unavailable,
+        });
+        updatedTeacher.dbId = saved.id;
+      }
+
+      setTeachers(teachers.map((item) => (item.id === editingTeacherId ? updatedTeacher : item)).sort((a, b) => a.name.localeCompare(b.name)));
+      setEditingTeacherId(null);
+    } catch (error) {
+      console.warn("Could not update teacher", error);
+      setDbError("Could not update teacher in Supabase.");
+    }
+  }
+
+  function startEditSlot(day: string, period: string, className: string) {
+    const entry = getEntryForSlot(day, period, className);
+    setEditSlotForm({
+      dbId: entry?.dbId,
+      day,
+      period,
+      className,
+      subject: entry?.subject || "Free",
+      teacherName: entry?.teacherName || "Free",
+    });
+  }
+
+  async function saveEditedSlot() {
+    if (!editSlotForm) return;
+
+    const updatedSlot: EditableTimetableEntry = {
+      dbId: editSlotForm.dbId,
+      day: editSlotForm.day,
+      period: Number(editSlotForm.period),
+      className: editSlotForm.className,
+      subject: editSlotForm.subject.trim() || "Free",
+      teacherName: editSlotForm.teacherName.trim() || "Free",
+    };
+
+    try {
+      if (updatedSlot.dbId) {
+        await updateTimetableSlot(updatedSlot.dbId, {
+          day: updatedSlot.day,
+          period: String(updatedSlot.period),
+          class_name: updatedSlot.className,
+          subject: updatedSlot.subject,
+          teacher_name: updatedSlot.teacherName,
+        });
+      }
+
+      setTimetableData((current) => {
+        const exists = current.some(
+          (entry) => entry.day === updatedSlot.day && entry.period.toString() === String(updatedSlot.period) && entry.className === updatedSlot.className
+        );
+        const next = exists
+          ? current.map((entry) =>
+              entry.day === updatedSlot.day && entry.period.toString() === String(updatedSlot.period) && entry.className === updatedSlot.className
+                ? updatedSlot
+                : entry
+            )
+          : [...current, updatedSlot];
+        return sortBySchoolOrder(next) as EditableTimetableEntry[];
+      });
+      setEditSlotForm(null);
+    } catch (error) {
+      console.warn("Could not update timetable slot", error);
+      setDbError("Could not update timetable slot in Supabase.");
+    }
   }
 
   function resetSavedData() {
@@ -835,6 +1117,7 @@ const [dbError, setDbError] = useState("");
 
     window.localStorage.removeItem(STORAGE_KEY);
     setTeachers(initialTeachers);
+    setTimetableData(timetableEntries);
     setAbsences([]);
     setCoverAssignments([]);
     setCoverRequest(null);
@@ -1046,7 +1329,7 @@ const [dbError, setDbError] = useState("");
       .map(
         (row) => `
           <tr>
-            <td>${escapeHtml(formatSchoolDay(row.day))}</td>
+            <td>${escapeHtml((row.date ? formatDateKey(row.date) : formatSchoolDay(row.day)))}</td>
             <td>Period ${escapeHtml(row.period)}</td>
             <td>${escapeHtml(row.className)}</td>
             <td>${escapeHtml(row.subject)}</td>
@@ -1175,7 +1458,7 @@ const [dbError, setDbError] = useState("");
     downloadCsv(`absent-teacher-cover-report.csv`, [
       ["Day", "Period", "Standard", "Subject", "Original Teacher", "Substitute"],
       ...absenceReportRows.map((row) => [
-        formatSchoolDay(row.day),
+        (row.date ? formatDateKey(row.date) : formatSchoolDay(row.day)),
         `Period ${row.period}`,
         row.className,
         row.subject,
@@ -1409,7 +1692,7 @@ const [dbError, setDbError] = useState("");
         <section className="rounded-xl bg-white p-5 shadow">
           <h2 className="mb-4 text-xl font-bold">1. Mark Teacher Absent</h2>
 
-          <div className="grid gap-4 md:grid-cols-5">
+          <div className="grid gap-4 md:grid-cols-7">
             <Select
               label="Teacher"
               value={selectedAbsentTeacherId}
@@ -1426,6 +1709,29 @@ const [dbError, setDbError] = useState("");
               options={days.map((day) => ({ label: formatSchoolDay(day), value: day }))}
               onChange={setSelectedAbsenceDay}
             />
+
+            <label className="space-y-1">
+              <span className="text-sm font-medium">Start Date</span>
+              <input
+                type="date"
+                value={selectedAbsenceStartDate}
+                onChange={(e) => {
+                  setSelectedAbsenceStartDate(e.target.value);
+                  setSelectedAbsenceDay(getSchoolDayFromDateKey(e.target.value));
+                }}
+                className="w-full rounded-lg border p-2"
+              />
+            </label>
+
+            <label className="space-y-1">
+              <span className="text-sm font-medium">End Date</span>
+              <input
+                type="date"
+                value={selectedAbsenceEndDate}
+                onChange={(e) => setSelectedAbsenceEndDate(e.target.value)}
+                className="w-full rounded-lg border p-2"
+              />
+            </label>
 
             <Select
               label="From Period"
@@ -1465,7 +1771,7 @@ const [dbError, setDbError] = useState("");
                   <div key={absence.id} className="rounded-lg border border-red-200 bg-red-50 p-4">
                     <h4 className="font-bold">{teacher.name}</h4>
                     <p className="text-sm text-slate-600">
-                      Absent on {formatSchoolDay(absence.day)}, Period {absence.startPeriod}–{absence.endPeriod}
+                      Absent on {absence.date ? formatDateKey(absence.date) : formatSchoolDay(absence.day)}, Period {absence.startPeriod}–{absence.endPeriod}
                     </p>
                     <button
                       onClick={() => removeAbsence(absence.id)}
@@ -1495,7 +1801,7 @@ const [dbError, setDbError] = useState("");
 
                 return (
                   <div key={day}>
-                    <h4 className="mb-2 font-bold text-slate-700">{formatSchoolDay(day)}</h4>
+                    <h4 className="mb-2 font-bold text-slate-700">{dayItems[0]?.date ? formatDateKey(dayItems[0].date) : formatSchoolDay(day)}</h4>
                     <div className="grid gap-3 md:grid-cols-4">
                       {dayItems.map((item) => (
                         <button
@@ -1504,6 +1810,7 @@ const [dbError, setDbError] = useState("");
                             chooseAffectedClass({
                               absentTeacherId: item.teacher.id,
                               day: item.day,
+                              date: item.date,
                               period: item.period,
                               className: item.className,
                               subject: item.subject,
@@ -1661,7 +1968,7 @@ const [dbError, setDbError] = useState("");
                 ) : (
                   absenceReportRows.map((row) => (
                     <tr key={`${row.day}-${row.period}-${row.className}-${row.originalTeacherName}`}>
-                      <td className="border p-3">{formatSchoolDay(row.day)}</td>
+                      <td className="border p-3">{(row.date ? formatDateKey(row.date) : formatSchoolDay(row.day))}</td>
                       <td className="border p-3 font-semibold">Period {row.period}</td>
                       <td className="border p-3">{row.className}</td>
                       <td className="border p-3">{row.subject}</td>
@@ -1842,6 +2149,12 @@ const [dbError, setDbError] = useState("");
                               Cover: {coverTeacher.name}
                             </div>
                           )}
+                          <button
+                            onClick={() => startEditSlot(day, period, selectedClass)}
+                            className="mt-2 rounded bg-slate-100 px-2 py-1 text-xs text-slate-700"
+                          >
+                            Edit Slot
+                          </button>
                         </td>
                       );
                     })}
@@ -1864,6 +2177,41 @@ const [dbError, setDbError] = useState("");
           </div>
         </section>
 
+
+
+        {editSlotForm && (
+          <section className="rounded-xl bg-white p-5 shadow">
+            <h2 className="mb-4 text-xl font-bold">Edit Timetable Slot</h2>
+            <p className="mb-3 text-sm text-slate-600">Update the teacher or subject for this class period. This saves to Supabase when the slot came from the database.</p>
+            <div className="grid gap-3 md:grid-cols-5">
+              <ReadOnlyField label="Class" value={editSlotForm.className} />
+              <ReadOnlyField label="Day" value={formatSchoolDay(editSlotForm.day)} />
+              <ReadOnlyField label="Period" value={`Period ${editSlotForm.period}`} />
+              <input
+                value={editSlotForm.subject}
+                onChange={(e) => setEditSlotForm({ ...editSlotForm, subject: e.target.value })}
+                placeholder="Subject"
+                className="rounded-lg border p-3"
+              />
+              <select
+                value={editSlotForm.teacherName}
+                onChange={(e) => setEditSlotForm({ ...editSlotForm, teacherName: e.target.value })}
+                className="rounded-lg border p-3"
+              >
+                <option value="Free">Free</option>
+                {teachers.map((teacher) => (
+                  <option key={teacher.id} value={teacher.name}>
+                    {teacher.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="mt-3 flex gap-2">
+              <button onClick={saveEditedSlot} className="rounded-lg bg-slate-900 px-4 py-2 text-sm text-white">Save Slot</button>
+              <button onClick={() => setEditSlotForm(null)} className="rounded-lg bg-slate-100 px-4 py-2 text-sm">Cancel</button>
+            </div>
+          </section>
+        )}
         <section className="rounded-xl bg-white p-5 shadow">
           <h2 className="mb-4 text-xl font-bold">Teacher Schedule View</h2>
 
@@ -1898,7 +2246,9 @@ const [dbError, setDbError] = useState("");
 
                   return (
                     <div key={day}>
-                      <h4 className="mb-2 font-bold text-slate-700">{formatSchoolDay(day)}</h4>
+                      <h4 className="mb-2 font-bold text-slate-700">
+  {formatSchoolDay(day)}
+</h4>
                       <div className="grid gap-3 md:grid-cols-3">
                         {items.map((item) => (
                           <div
@@ -2019,6 +2369,50 @@ const [dbError, setDbError] = useState("");
             </button>
           </div>
 
+          {editingTeacherId && (
+            <div className="mt-5 rounded-lg border bg-blue-50 p-4">
+              <h3 className="mb-3 font-bold">Edit Teacher</h3>
+              <div className="grid gap-3 md:grid-cols-5">
+                <input
+                  value={editTeacherForm.name}
+                  onChange={(e) => setEditTeacherForm({ ...editTeacherForm, name: e.target.value })}
+                  placeholder="Teacher name"
+                  className="rounded-lg border p-3"
+                />
+                <select
+                  value={editTeacherForm.gender}
+                  onChange={(e) => setEditTeacherForm({ ...editTeacherForm, gender: e.target.value as "Male" | "Female" })}
+                  className="rounded-lg border p-3"
+                >
+                  <option value="Female">Female</option>
+                  <option value="Male">Male</option>
+                </select>
+                <input
+                  value={editTeacherForm.subjects}
+                  onChange={(e) => setEditTeacherForm({ ...editTeacherForm, subjects: e.target.value })}
+                  placeholder="Subjects"
+                  className="rounded-lg border p-3"
+                />
+                <input
+                  value={editTeacherForm.classes}
+                  onChange={(e) => setEditTeacherForm({ ...editTeacherForm, classes: e.target.value })}
+                  placeholder="Classes"
+                  className="rounded-lg border p-3"
+                />
+                <input
+                  value={editTeacherForm.unavailable}
+                  onChange={(e) => setEditTeacherForm({ ...editTeacherForm, unavailable: e.target.value })}
+                  placeholder="Unavailable"
+                  className="rounded-lg border p-3"
+                />
+              </div>
+              <div className="mt-3 flex gap-2">
+                <button onClick={saveEditedTeacher} className="rounded-lg bg-blue-700 px-4 py-2 text-sm text-white">Save Changes</button>
+                <button onClick={() => setEditingTeacherId(null)} className="rounded-lg bg-white px-4 py-2 text-sm">Cancel</button>
+              </div>
+            </div>
+          )}
+
           <div className="mt-4 overflow-x-auto">
             <table className="w-full border-collapse text-sm">
               <thead>
@@ -2049,6 +2443,12 @@ const [dbError, setDbError] = useState("");
                       {teacher.unavailable.length ? teacher.unavailable.join(", ") : "None"}
                     </td>
                     <td className="border p-3">
+                      <button
+                        onClick={() => startEditTeacher(teacher)}
+                        className="mr-2 rounded-lg bg-blue-100 px-3 py-2 text-sm text-blue-700 hover:bg-blue-200"
+                      >
+                        Edit
+                      </button>
                       <button
                         onClick={() => removeTeacher(teacher.id)}
                         className="rounded-lg bg-red-100 px-3 py-2 text-sm text-red-700 hover:bg-red-200"

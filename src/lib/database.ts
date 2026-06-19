@@ -41,34 +41,19 @@ export type DbCoverAssignment = {
 };
 
 export async function getTeachers() {
-  const { data, error } = await supabase
-    .from("teachers")
-    .select("*")
-    .order("name");
-
+  const { data, error } = await supabase.from("teachers").select("*").order("name");
   if (error) throw error;
   return data as DbTeacher[];
 }
 
 export async function saveTeacher(teacher: DbTeacher) {
-  const { data, error } = await supabase
-    .from("teachers")
-    .insert(teacher)
-    .select()
-    .single();
-
+  const { data, error } = await supabase.from("teachers").insert(teacher).select().single();
   if (error) throw error;
   return data as DbTeacher;
 }
 
 export async function updateTeacher(id: string, teacher: Partial<DbTeacher>) {
-  const { data, error } = await supabase
-    .from("teachers")
-    .update(teacher)
-    .eq("id", id)
-    .select()
-    .single();
-
+  const { data, error } = await supabase.from("teachers").update(teacher).eq("id", id).select().single();
   if (error) throw error;
   return data as DbTeacher;
 }
@@ -79,54 +64,31 @@ export async function deleteTeacher(id: string) {
 }
 
 export async function getTimetableSlots() {
-  const { data, error } = await supabase
-    .from("timetable_slots")
-    .select("*");
-
+  const { data, error } = await supabase.from("timetable_slots").select("*");
   if (error) throw error;
   return data as DbTimetableSlot[];
 }
 
 export async function saveTimetableSlot(slot: DbTimetableSlot) {
-  const { data, error } = await supabase
-    .from("timetable_slots")
-    .insert(slot)
-    .select()
-    .single();
-
+  const { data, error } = await supabase.from("timetable_slots").insert(slot).select().single();
   if (error) throw error;
   return data as DbTimetableSlot;
 }
 
 export async function updateTimetableSlot(id: string, slot: Partial<DbTimetableSlot>) {
-  const { data, error } = await supabase
-    .from("timetable_slots")
-    .update(slot)
-    .eq("id", id)
-    .select()
-    .single();
-
+  const { data, error } = await supabase.from("timetable_slots").update(slot).eq("id", id).select().single();
   if (error) throw error;
   return data as DbTimetableSlot;
 }
 
 export async function getAbsences() {
-  const { data, error } = await supabase
-    .from("absences")
-    .select("*")
-    .order("start_date");
-
+  const { data, error } = await supabase.from("absences").select("*").order("start_date");
   if (error) throw error;
   return data as DbAbsence[];
 }
 
 export async function saveAbsence(absence: DbAbsence) {
-  const { data, error } = await supabase
-    .from("absences")
-    .insert(absence)
-    .select()
-    .single();
-
+  const { data, error } = await supabase.from("absences").insert(absence).select().single();
   if (error) throw error;
   return data as DbAbsence;
 }
@@ -137,32 +99,37 @@ export async function deleteAbsence(id: string) {
 }
 
 export async function getCoverAssignments() {
-  const { data, error } = await supabase
-    .from("cover_assignments")
-    .select("*")
-    .order("date")
-    .order("period");
-
+  const { data, error } = await supabase.from("cover_assignments").select("*").order("date").order("period");
   if (error) throw error;
   return data as DbCoverAssignment[];
 }
 
 export async function saveCoverAssignment(assignment: DbCoverAssignment) {
-  const { data, error } = await supabase
-    .from("cover_assignments")
-    .insert(assignment)
-    .select()
-    .single();
-
+  const { data, error } = await supabase.from("cover_assignments").insert(assignment).select().single();
   if (error) throw error;
   return data as DbCoverAssignment;
 }
 
 export async function deleteCoverAssignment(id: string) {
+  const { error } = await supabase.from("cover_assignments").delete().eq("id", id);
+  if (error) throw error;
+}
+
+export async function deleteCoverAssignmentsForAbsence(absentTeacherName: string, startDate: string, endDate: string) {
   const { error } = await supabase
     .from("cover_assignments")
     .delete()
-    .eq("id", id);
-
+    .eq("absent_teacher_name", absentTeacherName)
+    .gte("date", startDate)
+    .lte("date", endDate);
   if (error) throw error;
+}
+
+export async function replaceTimetableSlots(slots: DbTimetableSlot[]) {
+  const { error: deleteError } = await supabase.from("timetable_slots").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+  if (deleteError) throw deleteError;
+  if (!slots.length) return [];
+  const { data, error } = await supabase.from("timetable_slots").insert(slots).select();
+  if (error) throw error;
+  return data as DbTimetableSlot[];
 }

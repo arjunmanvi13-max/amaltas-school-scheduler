@@ -2,6 +2,7 @@ export const schoolName = "Amaltas School";
 
 export type Teacher = {
   id: number;
+  dbId?: string;
   name: string;
   gender: "Male" | "Female";
   subjects: string[];
@@ -10,6 +11,7 @@ export type Teacher = {
 };
 
 export type TimetableEntry = {
+  dbId?: string;
   className: string;
   teacherName: string;
   subject: string;
@@ -8142,3 +8144,6 @@ export const timetableEntries: TimetableEntry[] = sortBySchoolOrder(
     teacherName: cleanTeacherName(entry.teacherName),
   }))
 );
+
+
+export const timetableSlots = timetableEntries;

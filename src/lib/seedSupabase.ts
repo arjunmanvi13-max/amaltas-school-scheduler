@@ -15,7 +15,7 @@ type AnyTeacher = {
 
 type AnySlot = {
   day: string;
-  period: string;
+  period: string | number;
   className?: string;
   class_name?: string;
   subject: string;
@@ -24,27 +24,11 @@ type AnySlot = {
 };
 
 export async function seedSupabaseFromLocalData() {
-  const localTeachers = (
-    schoolData.initialTeachers ||
-    schoolData.teachers ||
-    []
-  ) as AnyTeacher[];
+  const localTeachers = (schoolData.initialTeachers || schoolData.teachers || []) as AnyTeacher[];
+  const localSlots = (schoolData.timetableSlots || schoolData.timetableEntries || schoolData.initialTimetableSlots || []) as AnySlot[];
 
-  const localSlots = (
-    schoolData.timetableSlots ||
-    schoolData.initialTimetableSlots ||
-    []
-  ) as AnySlot[];
-
-  const { data: existingTeachers } = await supabase
-    .from("teachers")
-    .select("id")
-    .limit(1);
-
-  const { data: existingSlots } = await supabase
-    .from("timetable_slots")
-    .select("id")
-    .limit(1);
+  const { data: existingTeachers } = await supabase.from("teachers").select("id").limit(1);
+  const { data: existingSlots } = await supabase.from("timetable_slots").select("id").limit(1);
 
   if (!existingTeachers?.length && localTeachers.length > 0) {
     await supabase.from("teachers").insert(
@@ -54,8 +38,7 @@ export async function seedSupabaseFromLocalData() {
         subjects: teacher.subjects || [],
         classes: teacher.classes || [],
         unavailable: teacher.unavailable || [],
-        class_teacher_for:
-          teacher.classTeacherFor || teacher.class_teacher_for || [],
+        class_teacher_for: teacher.classTeacherFor || teacher.class_teacher_for || [],
       }))
     );
   }
@@ -64,7 +47,7 @@ export async function seedSupabaseFromLocalData() {
     await supabase.from("timetable_slots").insert(
       localSlots.map((slot) => ({
         day: slot.day,
-        period: slot.period,
+        period: String(slot.period),
         class_name: slot.className || slot.class_name || "",
         subject: slot.subject,
         teacher_name: slot.teacherName || slot.teacher_name || "",
