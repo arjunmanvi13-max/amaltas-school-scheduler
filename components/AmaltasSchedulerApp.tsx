@@ -784,10 +784,32 @@ export default function AmaltasSchedulerApp() {
     (item) => item.day === todayDayName
   );
 
-  const selectedTeacherViewScheduleByDay = days.map((day) => ({
+  const selectedTeacherViewScheduleByDay = days.map((day) => {
+  const regularItems = selectedTeacherViewSchedule
+    .filter((item) => item.day === day)
+    .map((item) => ({ ...item, isCoverDuty: false, absentTeacherName: "" }));
+
+  const coverItems = selectedTeacherView
+    ? coverAssignments
+        .filter((assignment) => assignment.coverTeacherId === selectedTeacherView.id && assignment.day === day)
+        .map((assignment) => {
+          const absentTeacher = teachers.find((teacher) => teacher.id === assignment.absentTeacherId);
+          return {
+            day: assignment.day,
+            period: assignment.period,
+            className: assignment.className,
+            subject: assignment.subject,
+            isCoverDuty: true,
+            absentTeacherName: absentTeacher?.name || "Original teacher",
+          };
+        })
+    : [];
+
+  return {
     day,
-    items: selectedTeacherViewSchedule.filter((item) => item.day === day),
-  }));
+    items: sortBySchoolOrder([...regularItems, ...coverItems]),
+  };
+});
 
   const selectedTeacherCoverDuties = selectedTeacherView
     ? (sortBySchoolOrder(
@@ -1168,33 +1190,38 @@ export default function AmaltasSchedulerApp() {
     );
   }
 
-  function downloadExcelTemplate() {
-    const teacherRows = [
-      {
-        Name: "Example Teacher",
-        Gender: "Female",
-        Subjects: "Maths, English",
-        Classes: "I A, I B",
-        Unavailable: "Monday-3",
-        ClassTeacherFor: "I A",
-      },
-    ];
+  function downloadCurrentDatabase() {
+  const classTeacherMap = classTeachers.reduce<Record<string, string[]>>((acc, item) => {
+    if (!acc[item.teacherName]) acc[item.teacherName] = [];
+    acc[item.teacherName].push(item.className);
+    return acc;
+  }, {});
 
-    const timetableRows = [
-      {
-        Day: "Monday",
-        Period: "1",
-        Class: "I A",
-        Subject: "Maths",
-        Teacher: "Example Teacher",
-      },
-    ];
+  const teacherRows = teachers.map((teacher) => ({
+    Name: teacher.name,
+    Gender: teacher.gender,
+    Subjects: teacher.subjects.join(", "),
+    Classes: sortClasses(teacher.classes).join(", "),
+    Unavailable: teacher.unavailable.join(", "),
+    ClassTeacherFor: (teacher.class_teacher_for?.length
+      ? teacher.class_teacher_for
+      : classTeacherMap[teacher.name] || []
+    ).join(", "),
+  }));
 
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(teacherRows), "Teachers");
-    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(timetableRows), "Timetable");
-    XLSX.writeFile(workbook, "amaltas-upload-template.xlsx");
-  }
+  const timetableRows = sortBySchoolOrder(timetableData).map((slot) => ({
+    Day: slot.day,
+    Period: String(slot.period),
+    Class: slot.className,
+    Subject: slot.subject,
+    Teacher: slot.teacherName,
+  }));
+
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(teacherRows), "Teachers");
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(timetableRows), "Timetable");
+  XLSX.writeFile(workbook, "amaltas-current-database.xlsx");
+}
 
   async function handleExcelUpload(file: File | null) {
     if (!file) return;
@@ -1857,10 +1884,21 @@ export default function AmaltasSchedulerApp() {
                       ) : (
                         <div className="grid gap-3 md:grid-cols-3">
                           {items.map((item) => (
-                            <div key={`${item.day}-${item.period}-${item.className}-${item.subject}`} className="rounded-lg border p-3">
-                              <p className="font-semibold">Period {item.period}</p>
-                              <p className="text-sm text-slate-600">Class {item.className} - {item.subject}</p>
-                            </div>
+                            <div
+  key={`${item.day}-${item.period}-${item.className}-${item.subject}-${item.isCoverDuty ? "cover" : "regular"}`}
+  className={`rounded-lg border p-3 ${item.isCoverDuty ? "border-green-200 bg-green-50" : ""}`}
+>
+  <p className="font-semibold">
+    Period {item.period}
+    {item.isCoverDuty ? " - Cover Duty" : ""}
+  </p>
+  <p className="text-sm text-slate-600">Class {item.className} - {item.subject}</p>
+  {item.isCoverDuty && (
+    <p className="mt-2 text-xs text-green-800">
+      Covering for {item.absentTeacherName}
+    </p>
+  )}
+</div>
                           ))}
                         </div>
                       )}
@@ -1907,10 +1945,10 @@ export default function AmaltasSchedulerApp() {
             <div>
               <h2 className="text-xl font-bold">School Data Upload</h2>
               <p className="mt-1 text-sm text-slate-600">Upload a locked-format Excel workbook to replace the teacher database and timetable across devices.</p>
-              <p className="mt-2 text-xs text-slate-500">Expected sheets: <strong>Teachers</strong> and <strong>Timetable</strong>. Use Download Template if needed.</p>
+              <p className="mt-2 text-xs text-slate-500">Expected sheets: <strong>Teachers</strong> and <strong>Timetable</strong>. Download the current database, edit it, then upload it back.</p>
             </div>
             <div className="flex flex-col gap-2 md:min-w-72">
-              <button onClick={downloadExcelTemplate} className="rounded-lg bg-slate-700 px-4 py-2 text-sm text-white">Download Excel Template</button>
+              <button onClick={downloadCurrentDatabase} className="rounded-lg bg-slate-700 px-4 py-2 text-sm text-white">Download Current Database</button>
               <input
                 type="file"
                 accept=".xlsx,.xls"
