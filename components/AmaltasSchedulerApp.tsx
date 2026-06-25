@@ -80,6 +80,7 @@ type EditableTimetableEntry = {
   dbId?: string;
   className: string;
   teacherName: string;
+  auxiliaryTeacherName?: string;
   subject: string;
   period: number;
   day: string;
@@ -92,6 +93,7 @@ type EditSlotForm = {
   period: string;
   subject: string;
   teacherName: string;
+  auxiliaryTeacherName: string;
 };
 
 type ExcelImportPreview = {
@@ -195,6 +197,7 @@ export default function AmaltasSchedulerApp() {
   const [teacherSearch, setTeacherSearch] = useState("");
   const [teacherSubjectFilter, setTeacherSubjectFilter] = useState("All");
   const [teacherClassFilter, setTeacherClassFilter] = useState("All");
+  const [selectedSubjectTeacherList, setSelectedSubjectTeacherList] = useState(subjects[0] || "All");
   const [selectedTeacherProfileId, setSelectedTeacherProfileId] = useState(
     initialTeachers[0]?.id || 1
   );
@@ -343,7 +346,7 @@ export default function AmaltasSchedulerApp() {
           subjects: teacher.subjects || [],
           classes: teacher.classes || [],
           unavailable: teacher.unavailable || [],
-          classTeacherFor: teacher.class_teacher_for || [],
+          class_teacher_for: teacher.class_teacher_for || [],
         }));
 
         setTeachers(convertedTeachers);
@@ -365,6 +368,7 @@ export default function AmaltasSchedulerApp() {
               className: slot.class_name,
               subject: slot.subject,
               teacherName: slot.teacher_name,
+              auxiliaryTeacherName: slot.auxiliary_teacher_name || "",
             }))
           ) as EditableTimetableEntry[]
         );
@@ -443,6 +447,25 @@ export default function AmaltasSchedulerApp() {
       .filter(Boolean);
   }
 
+  function teacherMatchesSlot(teacher: Teacher, entry: EditableTimetableEntry) {
+    const teacherName = normalizeName(teacher.name);
+    return (
+      normalizeName(entry.teacherName) === teacherName ||
+      normalizeName(entry.auxiliaryTeacherName || "") === teacherName
+    );
+  }
+
+  function deriveTeacherMetadataFromTimetable(sourceTeachers: Teacher[], sourceTimetable: EditableTimetableEntry[]) {
+    return sourceTeachers.map((teacher) => {
+      const teacherEntries = sourceTimetable.filter((entry) => teacherMatchesSlot(teacher, entry));
+      return {
+        ...teacher,
+        subjects: Array.from(new Set(teacherEntries.map((entry) => entry.subject).filter((subject) => subject && subject !== "Free"))).sort((a, b) => a.localeCompare(b)),
+        classes: sortClasses(Array.from(new Set(teacherEntries.map((entry) => entry.className).filter(Boolean)))),
+      };
+    });
+  }
+
   function isPeriodInRange(period: string | number, startPeriod: string, endPeriod: string) {
     const periodNumber = Number(period);
     return periodNumber >= Number(startPeriod) && periodNumber <= Number(endPeriod);
@@ -503,6 +526,11 @@ export default function AmaltasSchedulerApp() {
     return entry?.teacherName || "Free";
   }
 
+  function getAuxiliaryTeacherNameForSlot(day: string, period: string, className: string) {
+    const entry = getEntryForSlot(day, period, className);
+    return entry?.auxiliaryTeacherName || "";
+  }
+
   function getSubjectForSlot(day: string, period: string, className: string) {
     const entry = getEntryForSlot(day, period, className);
     return entry?.subject || "Free";
@@ -518,7 +546,7 @@ export default function AmaltasSchedulerApp() {
           (entry) =>
             entry.day === day &&
             isPeriodInRange(entry.period, startPeriod, endPeriod) &&
-            normalizeName(entry.teacherName) === normalizeName(teacher.name)
+            teacherMatchesSlot(teacher, entry)
         )
         .map((entry) => ({
           day: entry.day,
@@ -537,7 +565,7 @@ export default function AmaltasSchedulerApp() {
 
     return sortBySchoolOrder(
       timetableData
-        .filter((entry) => normalizeName(entry.teacherName) === normalizeName(teacher.name))
+        .filter((entry) => teacherMatchesSlot(teacher, entry))
         .map((entry) => ({
           day: entry.day,
           period: entry.period.toString(),
@@ -552,7 +580,7 @@ export default function AmaltasSchedulerApp() {
     if (!teacher) return 0;
 
     return timetableData.filter(
-      (entry) => normalizeName(entry.teacherName) === normalizeName(teacher.name)
+      (entry) => teacherMatchesSlot(teacher, entry)
     ).length;
   }
 
@@ -565,7 +593,7 @@ export default function AmaltasSchedulerApp() {
       (entry) =>
         entry.day === day &&
         entry.period.toString() === period &&
-        normalizeName(entry.teacherName) === normalizeName(teacher.name)
+        teacherMatchesSlot(teacher, entry)
     );
   }
 
@@ -715,6 +743,7 @@ export default function AmaltasSchedulerApp() {
         period,
         subject: getSubjectForSlot(selectedDailyViewDay, period, className),
         teacherName: getTeacherNameForSlot(selectedDailyViewDay, period, className),
+        auxiliaryTeacherName: getAuxiliaryTeacherNameForSlot(selectedDailyViewDay, period, className),
         coverTeacherName: coverTeacher?.name || "",
       };
     }),
@@ -766,8 +795,29 @@ export default function AmaltasSchedulerApp() {
   }[];
 
   const subjectOptions = useMemo(() => {
-    return ["All", ...Array.from(new Set(teachers.flatMap((teacher) => teacher.subjects))).sort()];
-  }, [teachers]);
+    return ["All", ...Array.from(new Set([
+      ...teachers.flatMap((teacher) => teacher.subjects),
+      ...timetableData.map((entry) => entry.subject),
+    ].filter((subject) => subject && subject !== "Free"))).sort()];
+  }, [teachers, timetableData]);
+
+  const teachersForSelectedSubject = useMemo(() => {
+    if (selectedSubjectTeacherList === "All") return [];
+    return teachers
+      .map((teacher) => {
+        const matchingEntries = timetableData.filter(
+          (entry) => entry.subject === selectedSubjectTeacherList && teacherMatchesSlot(teacher, entry)
+        );
+
+        return {
+          teacher,
+          classes: sortClasses(Array.from(new Set(matchingEntries.map((entry) => entry.className)))),
+          weeklyPeriods: matchingEntries.length,
+        };
+      })
+      .filter((item) => item.weeklyPeriods > 0)
+      .sort((a, b) => a.teacher.name.localeCompare(b.teacher.name));
+  }, [selectedSubjectTeacherList, teachers, timetableData]);
 
   const classOptions = useMemo(() => {
     return ["All", ...sortClasses(Array.from(new Set(teachers.flatMap((teacher) => teacher.classes))))];
@@ -1097,6 +1147,7 @@ export default function AmaltasSchedulerApp() {
       className,
       subject: entry?.subject || "Free",
       teacherName: entry?.teacherName || "Free",
+      auxiliaryTeacherName: entry?.auxiliaryTeacherName || "",
     });
   }
 
@@ -1110,6 +1161,7 @@ export default function AmaltasSchedulerApp() {
       className: editSlotForm.className,
       subject: editSlotForm.subject.trim() || "Free",
       teacherName: editSlotForm.teacherName.trim() || "Free",
+      auxiliaryTeacherName: editSlotForm.auxiliaryTeacherName.trim(),
     };
 
     try {
@@ -1120,6 +1172,7 @@ export default function AmaltasSchedulerApp() {
           class_name: updatedSlot.className,
           subject: updatedSlot.subject,
           teacher_name: updatedSlot.teacherName,
+          auxiliary_teacher_name: updatedSlot.auxiliaryTeacherName || "",
         });
       } else {
         const saved = await saveTimetableSlot({
@@ -1128,6 +1181,7 @@ export default function AmaltasSchedulerApp() {
           class_name: updatedSlot.className,
           subject: updatedSlot.subject,
           teacher_name: updatedSlot.teacherName,
+          auxiliary_teacher_name: updatedSlot.auxiliaryTeacherName || "",
         });
         updatedSlot = { ...updatedSlot, dbId: saved.id };
       }
@@ -1191,37 +1245,35 @@ export default function AmaltasSchedulerApp() {
   }
 
   function downloadCurrentDatabase() {
-  const classTeacherMap = classTeachers.reduce<Record<string, string[]>>((acc, item) => {
-    if (!acc[item.teacherName]) acc[item.teacherName] = [];
-    acc[item.teacherName].push(item.className);
-    return acc;
-  }, {});
+    const classTeacherMap = classTeachers.reduce<Record<string, string[]>>((acc, item) => {
+      if (!acc[item.teacherName]) acc[item.teacherName] = [];
+      acc[item.teacherName].push(item.className);
+      return acc;
+    }, {});
 
-  const teacherRows = teachers.map((teacher) => ({
-    Name: teacher.name,
-    Gender: teacher.gender,
-    Subjects: teacher.subjects.join(", "),
-    Classes: sortClasses(teacher.classes).join(", "),
-    Unavailable: teacher.unavailable.join(", "),
-    ClassTeacherFor: (teacher.class_teacher_for?.length
-      ? teacher.class_teacher_for
-      : classTeacherMap[teacher.name] || []
-    ).join(", "),
-  }));
+    const teacherRows = teachers.map((teacher) => ({
+      Teacher: teacher.name,
+      Gender: teacher.gender,
+      ClassTeacherFor: (teacher.class_teacher_for?.length
+        ? teacher.class_teacher_for
+        : classTeacherMap[teacher.name] || []
+      ).join(", "),
+    }));
 
-  const timetableRows = sortBySchoolOrder(timetableData).map((slot) => ({
-    Day: slot.day,
-    Period: String(slot.period),
-    Class: slot.className,
-    Subject: slot.subject,
-    Teacher: slot.teacherName,
-  }));
+    const timetableRows = sortBySchoolOrder(timetableData).map((slot) => ({
+      Day: slot.day,
+      Period: String(slot.period),
+      Class: slot.className,
+      Subject: slot.subject,
+      MainTeacher: slot.teacherName,
+      AuxiliaryTeacher: slot.auxiliaryTeacherName || "",
+    }));
 
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(teacherRows), "Teachers");
-  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(timetableRows), "Timetable");
-  XLSX.writeFile(workbook, "amaltas-current-database.xlsx");
-}
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(teacherRows), "Teachers");
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(timetableRows), "Timetable");
+    XLSX.writeFile(workbook, "amaltas-current-database.xlsx");
+  }
 
   async function handleExcelUpload(file: File | null) {
     if (!file) return;
@@ -1256,10 +1308,10 @@ export default function AmaltasSchedulerApp() {
             id: Date.now() + index,
             name,
             gender,
-            subjects: parseExcelList(readCell(row, ["Subjects", "Subject"])),
-            classes: sortClasses(parseExcelList(readCell(row, ["Classes", "Class", "Standards", "Standard"]))),
-            unavailable: parseExcelList(readCell(row, ["Unavailable", "Availability", "Unavailable Slots"])),
-            class_teacher_for: parseExcelList(readCell(row, ["ClassTeacherFor", "Class Teacher For", "Class Teacher"])),
+            subjects: [],
+            classes: [],
+            unavailable: [],
+            class_teacher_for: parseExcelList(readCell(row, ["ClassTeacherFor", "Class Teacher For", "Class Teacher Of", "Class Teacher"])),
           } as Teacher;
         })
         .filter(Boolean) as Teacher[];
@@ -1270,7 +1322,8 @@ export default function AmaltasSchedulerApp() {
           const period = readCell(row, ["Period"]);
           const className = readCell(row, ["Class", "Class Name", "Standard"]);
           const subject = readCell(row, ["Subject"]);
-          const teacherName = readCell(row, ["Teacher", "Teacher Name"]);
+          const teacherName = readCell(row, ["MainTeacher", "Main Teacher", "Teacher", "Teacher Name"]);
+          const auxiliaryTeacherName = readCell(row, ["AuxiliaryTeacher", "Auxiliary Teacher", "Aux Teacher", "Assistant Teacher"]);
 
           if (!day || !period || !className) return null;
 
@@ -1280,12 +1333,15 @@ export default function AmaltasSchedulerApp() {
             className,
             subject: subject || "Free",
             teacherName: teacherName || "Free",
+            auxiliaryTeacherName,
           } as EditableTimetableEntry;
         })
         .filter(Boolean) as EditableTimetableEntry[];
 
+      const parsedTeachersWithMetadata = deriveTeacherMetadataFromTimetable(parsedTeachers, parsedTimetable);
+
       setExcelImportPreview({
-        teachers: parsedTeachers,
+        teachers: parsedTeachersWithMetadata,
         timetable: sortBySchoolOrder(parsedTimetable) as EditableTimetableEntry[],
         warnings,
       });
@@ -1341,6 +1397,7 @@ export default function AmaltasSchedulerApp() {
             class_name: slot.className,
             subject: slot.subject,
             teacher_name: slot.teacherName,
+            auxiliary_teacher_name: slot.auxiliaryTeacherName || "",
           }))
         );
 
@@ -1353,6 +1410,7 @@ export default function AmaltasSchedulerApp() {
               className: slot.class_name,
               subject: slot.subject,
               teacherName: slot.teacher_name,
+              auxiliaryTeacherName: slot.auxiliary_teacher_name || "",
             }))
           ) as EditableTimetableEntry[]
         );
@@ -1434,6 +1492,7 @@ export default function AmaltasSchedulerApp() {
         const cells = days
           .map((day) => {
             const teacherName = getTeacherNameForSlot(day, period, className);
+            const auxiliaryTeacherName = getAuxiliaryTeacherNameForSlot(day, period, className);
             const subject = getSubjectForSlot(day, period, className);
             const coverAssignment = coverAssignments.find(
               (assignment) =>
@@ -1448,7 +1507,8 @@ export default function AmaltasSchedulerApp() {
             return `
               <td>
                 <div class="subject">${escapeHtml(subject)}</div>
-                <div class="teacher">${escapeHtml(teacherName)}</div>
+                <div class="teacher">Main: ${escapeHtml(teacherName)}</div>
+                ${auxiliaryTeacherName ? `<div class="teacher">Auxiliary: ${escapeHtml(auxiliaryTeacherName)}</div>` : ""}
                 ${includeCovers && coverTeacher ? `<div class="cover">Cover: ${escapeHtml(coverTeacher.name)}</div>` : ""}
               </td>
             `;
@@ -1501,7 +1561,8 @@ export default function AmaltasSchedulerApp() {
             (item) => `
               <td>
                 <div class="subject">${escapeHtml(item.subject)}</div>
-                <div class="teacher">${escapeHtml(item.teacherName)}</div>
+                <div class="teacher">Main: ${escapeHtml(item.teacherName)}</div>
+                ${item.auxiliaryTeacherName ? `<div class="teacher">Auxiliary: ${escapeHtml(item.auxiliaryTeacherName)}</div>` : ""}
                 ${showDailyCovers && item.coverTeacherName ? `<div class="cover">Cover: ${escapeHtml(item.coverTeacherName)}</div>` : ""}
               </td>
             `
@@ -1627,7 +1688,7 @@ export default function AmaltasSchedulerApp() {
 
   function downloadSelectedTimetable() {
     downloadCsv(`${selectedClass}-weekly-timetable.csv`, [
-      ["Class", "Day", "Period", "Subject", "Teacher", "Cover"],
+      ["Class", "Day", "Period", "Subject", "Main Teacher", "Auxiliary Teacher", "Cover"],
       ...days.flatMap((day) =>
         periods.map((period) => {
           const coverAssignment = coverAssignments.find(
@@ -1646,6 +1707,7 @@ export default function AmaltasSchedulerApp() {
             `Period ${period}`,
             getSubjectForSlot(day, period, selectedClass),
             getTeacherNameForSlot(day, period, selectedClass),
+            getAuxiliaryTeacherNameForSlot(day, period, selectedClass),
             showWeeklyCovers ? coverTeacher?.name || "" : "",
           ];
         })
@@ -1655,7 +1717,7 @@ export default function AmaltasSchedulerApp() {
 
   function downloadAllTimetables() {
     downloadCsv(`all-class-weekly-timetables.csv`, [
-      ["Class", "Day", "Period", "Subject", "Teacher", "Cover"],
+      ["Class", "Day", "Period", "Subject", "Main Teacher", "Auxiliary Teacher", "Cover"],
       ...standards.flatMap((className) =>
         days.flatMap((day) =>
           periods.map((period) => {
@@ -1675,6 +1737,7 @@ export default function AmaltasSchedulerApp() {
               `Period ${period}`,
               getSubjectForSlot(day, period, className),
               getTeacherNameForSlot(day, period, className),
+              getAuxiliaryTeacherNameForSlot(day, period, className),
               showWeeklyCovers ? coverTeacher?.name || "" : "",
             ];
           })
@@ -1685,7 +1748,7 @@ export default function AmaltasSchedulerApp() {
 
   function downloadDailyAllClasses() {
     downloadCsv(`${selectedDailyViewDay}-all-classes-timetable.csv`, [
-      ["Day", "Class", "Class Teacher", "Period", "Subject", "Teacher", "Cover"],
+      ["Day", "Class", "Class Teacher", "Period", "Subject", "Main Teacher", "Auxiliary Teacher", "Cover"],
       ...dailyAllClassRows.flatMap((row) =>
         row.periods.map((item) => [
           formatSchoolDay(selectedDailyViewDay),
@@ -1694,6 +1757,7 @@ export default function AmaltasSchedulerApp() {
           `Period ${item.period}`,
           item.subject,
           item.teacherName,
+          item.auxiliaryTeacherName,
           showDailyCovers ? item.coverTeacherName : "",
         ])
       ),
@@ -2352,7 +2416,10 @@ export default function AmaltasSchedulerApp() {
                     {row.periods.map((item) => (
                       <td key={`${row.className}-${item.period}`} className="border p-3">
                         <div className="font-semibold">{item.subject}</div>
-                        <div className="text-slate-600">{item.teacherName}</div>
+                        <div className="text-slate-600">Main: {item.teacherName}</div>
+                        {item.auxiliaryTeacherName && (
+                          <div className="text-slate-600">Auxiliary: {item.auxiliaryTeacherName}</div>
+                        )}
                         {showDailyCovers && item.coverTeacherName && (
                           <div className="mt-2 rounded bg-green-100 p-2 text-xs text-green-800">
                             Cover: {item.coverTeacherName}
@@ -2436,6 +2503,7 @@ export default function AmaltasSchedulerApp() {
                     <td className="border p-3 font-bold">Period {period}</td>
                     {days.map((day) => {
                       const teacherName = getTeacherNameForSlot(day, period, selectedClass);
+                      const auxiliaryTeacherName = getAuxiliaryTeacherNameForSlot(day, period, selectedClass);
                       const subject = getSubjectForSlot(day, period, selectedClass);
 
                       const coverAssignment = coverAssignments.find(
@@ -2452,7 +2520,10 @@ export default function AmaltasSchedulerApp() {
                       return (
                         <td key={day} className="border p-3">
                           <div className="font-semibold">{subject}</div>
-                          <div className="text-slate-600">{teacherName}</div>
+                          <div className="text-slate-600">Main: {teacherName}</div>
+                          {auxiliaryTeacherName && (
+                            <div className="text-slate-600">Auxiliary: {auxiliaryTeacherName}</div>
+                          )}
 
                           {showWeeklyCovers && coverTeacher && (
                             <div className="mt-2 rounded bg-green-100 p-2 text-xs text-green-800">
@@ -2499,7 +2570,7 @@ export default function AmaltasSchedulerApp() {
                 <ReadOnlyField label="Day" value={formatSchoolDay(editSlotForm.day)} />
                 <ReadOnlyField label="Period" value={`Period ${editSlotForm.period}`} />
               </div>
-              <div className="mt-4 grid gap-3 md:grid-cols-2">
+              <div className="mt-4 grid gap-3 md:grid-cols-3">
                 <label className="space-y-1">
                   <span className="text-sm font-medium">Subject</span>
                   <input
@@ -2510,13 +2581,28 @@ export default function AmaltasSchedulerApp() {
                   />
                 </label>
                 <label className="space-y-1">
-                  <span className="text-sm font-medium">Teacher</span>
+                  <span className="text-sm font-medium">Main Teacher</span>
                   <select
                     value={editSlotForm.teacherName}
                     onChange={(e) => setEditSlotForm({ ...editSlotForm, teacherName: e.target.value })}
                     className="w-full rounded-lg border p-3"
                   >
                     <option value="Free">Free</option>
+                    {teachers.map((teacher) => (
+                      <option key={teacher.id} value={teacher.name}>
+                        {teacher.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="space-y-1">
+                  <span className="text-sm font-medium">Auxiliary Teacher</span>
+                  <select
+                    value={editSlotForm.auxiliaryTeacherName}
+                    onChange={(e) => setEditSlotForm({ ...editSlotForm, auxiliaryTeacherName: e.target.value })}
+                    className="w-full rounded-lg border p-3"
+                  >
+                    <option value="">None</option>
                     {teachers.map((teacher) => (
                       <option key={teacher.id} value={teacher.name}>
                         {teacher.name}
@@ -2532,6 +2618,50 @@ export default function AmaltasSchedulerApp() {
             </section>
           </div>
         )}
+        <section className="rounded-xl bg-white p-5 shadow">
+          <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h2 className="text-xl font-bold">Teachers by Subject</h2>
+              <p className="text-sm text-slate-600">Select a subject to see every teacher assigned to it from the timetable.</p>
+            </div>
+            <div className="w-full md:w-72">
+              <Select
+                label="Subject"
+                value={selectedSubjectTeacherList}
+                options={subjectOptions.map((subject) => ({ label: subject, value: subject }))}
+                onChange={setSelectedSubjectTeacherList}
+              />
+            </div>
+          </div>
+
+          {selectedSubjectTeacherList === "All" ? (
+            <div className="rounded-lg border p-4 text-sm text-slate-600">Choose a subject to view assigned teachers.</div>
+          ) : teachersForSelectedSubject.length === 0 ? (
+            <div className="rounded-lg border p-4 text-sm text-slate-600">No teachers found for this subject.</div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full border-collapse text-sm">
+                <thead>
+                  <tr>
+                    <th className="border bg-slate-100 p-3 text-left">Teacher</th>
+                    <th className="border bg-slate-100 p-3 text-left">Classes</th>
+                    <th className="border bg-slate-100 p-3 text-left">Weekly Periods</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {teachersForSelectedSubject.map((item) => (
+                    <tr key={item.teacher.id}>
+                      <td className="border p-3 font-semibold">{item.teacher.name}</td>
+                      <td className="border p-3">{item.classes.join(", ") || "Not listed"}</td>
+                      <td className="border p-3 font-semibold">{item.weeklyPeriods}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+
         <section className="rounded-xl bg-white p-5 shadow">
           <h2 className="mb-4 text-xl font-bold">Teacher Schedule View</h2>
 

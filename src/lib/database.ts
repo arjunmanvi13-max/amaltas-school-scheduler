@@ -17,6 +17,7 @@ export type DbTimetableSlot = {
   class_name: string;
   subject: string;
   teacher_name: string;
+  auxiliary_teacher_name?: string;
 };
 
 export type DbAbsence = {

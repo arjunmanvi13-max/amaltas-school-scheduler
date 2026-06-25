@@ -15,6 +15,7 @@ export type TimetableEntry = {
   dbId?: string;
   className: string;
   teacherName: string;
+  auxiliaryTeacherName?: string;
   subject: string;
   period: number;
   day: string;

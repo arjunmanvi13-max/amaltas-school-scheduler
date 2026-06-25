@@ -21,6 +21,8 @@ type AnySlot = {
   subject: string;
   teacherName?: string;
   teacher_name?: string;
+  auxiliaryTeacherName?: string;
+  auxiliary_teacher_name?: string;
 };
 
 export async function seedSupabaseFromLocalData() {
@@ -51,6 +53,7 @@ export async function seedSupabaseFromLocalData() {
         class_name: slot.className || slot.class_name || "",
         subject: slot.subject,
         teacher_name: slot.teacherName || slot.teacher_name || "",
+        auxiliary_teacher_name: slot.auxiliaryTeacherName || slot.auxiliary_teacher_name || "",
       }))
     );
   }
