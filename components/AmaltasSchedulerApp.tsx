@@ -1322,7 +1322,7 @@ export default function AmaltasSchedulerApp() {
           const period = readCell(row, ["Period"]);
           const className = readCell(row, ["Class", "Class Name", "Standard"]);
           const subject = readCell(row, ["Subject"]);
-          const teacherName = readCell(row, ["MainTeacher", "Main Teacher", "Teacher", "Teacher Name"]);
+          const teacherName = readCell(row, ["MainTeacher", "Teacher", "Teacher", "Teacher Name"]);
           const auxiliaryTeacherName = readCell(row, ["AuxiliaryTeacher", "Auxiliary Teacher", "Aux Teacher", "Assistant Teacher"]);
 
           if (!day || !period || !className) return null;
@@ -1507,7 +1507,7 @@ export default function AmaltasSchedulerApp() {
             return `
               <td>
                 <div class="subject">${escapeHtml(subject)}</div>
-                <div class="teacher">Main: ${escapeHtml(teacherName)}</div>
+                <div class="teacher">Teacher: ${escapeHtml(teacherName)}</div>
                 ${auxiliaryTeacherName ? `<div class="teacher">Auxiliary: ${escapeHtml(auxiliaryTeacherName)}</div>` : ""}
                 ${includeCovers && coverTeacher ? `<div class="cover">Cover: ${escapeHtml(coverTeacher.name)}</div>` : ""}
               </td>
@@ -1561,7 +1561,7 @@ export default function AmaltasSchedulerApp() {
             (item) => `
               <td>
                 <div class="subject">${escapeHtml(item.subject)}</div>
-                <div class="teacher">Main: ${escapeHtml(item.teacherName)}</div>
+                <div class="teacher">Teacher: ${escapeHtml(item.teacherName)}</div>
                 ${item.auxiliaryTeacherName ? `<div class="teacher">Auxiliary: ${escapeHtml(item.auxiliaryTeacherName)}</div>` : ""}
                 ${showDailyCovers && item.coverTeacherName ? `<div class="cover">Cover: ${escapeHtml(item.coverTeacherName)}</div>` : ""}
               </td>
@@ -1688,7 +1688,7 @@ export default function AmaltasSchedulerApp() {
 
   function downloadSelectedTimetable() {
     downloadCsv(`${selectedClass}-weekly-timetable.csv`, [
-      ["Class", "Day", "Period", "Subject", "Main Teacher", "Auxiliary Teacher", "Cover"],
+      ["Class", "Day", "Period", "Subject", "Teacher", "Auxiliary Teacher", "Cover"],
       ...days.flatMap((day) =>
         periods.map((period) => {
           const coverAssignment = coverAssignments.find(
@@ -1717,7 +1717,7 @@ export default function AmaltasSchedulerApp() {
 
   function downloadAllTimetables() {
     downloadCsv(`all-class-weekly-timetables.csv`, [
-      ["Class", "Day", "Period", "Subject", "Main Teacher", "Auxiliary Teacher", "Cover"],
+      ["Class", "Day", "Period", "Subject", "Teacher", "Auxiliary Teacher", "Cover"],
       ...standards.flatMap((className) =>
         days.flatMap((day) =>
           periods.map((period) => {
@@ -1748,7 +1748,7 @@ export default function AmaltasSchedulerApp() {
 
   function downloadDailyAllClasses() {
     downloadCsv(`${selectedDailyViewDay}-all-classes-timetable.csv`, [
-      ["Day", "Class", "Class Teacher", "Period", "Subject", "Main Teacher", "Auxiliary Teacher", "Cover"],
+      ["Day", "Class", "Class Teacher", "Period", "Subject", "Teacher", "Auxiliary Teacher", "Cover"],
       ...dailyAllClassRows.flatMap((row) =>
         row.periods.map((item) => [
           formatSchoolDay(selectedDailyViewDay),
@@ -2416,7 +2416,7 @@ export default function AmaltasSchedulerApp() {
                     {row.periods.map((item) => (
                       <td key={`${row.className}-${item.period}`} className="border p-3">
                         <div className="font-semibold">{item.subject}</div>
-                        <div className="text-slate-600">Main: {item.teacherName}</div>
+                        <div className="text-slate-600">Teacher: {item.teacherName}</div>
                         {item.auxiliaryTeacherName && (
                           <div className="text-slate-600">Auxiliary: {item.auxiliaryTeacherName}</div>
                         )}
@@ -2520,7 +2520,7 @@ export default function AmaltasSchedulerApp() {
                       return (
                         <td key={day} className="border p-3">
                           <div className="font-semibold">{subject}</div>
-                          <div className="text-slate-600">Main: {teacherName}</div>
+                          <div className="text-slate-600">Teacher: {teacherName}</div>
                           {auxiliaryTeacherName && (
                             <div className="text-slate-600">Auxiliary: {auxiliaryTeacherName}</div>
                           )}
@@ -2581,7 +2581,7 @@ export default function AmaltasSchedulerApp() {
                   />
                 </label>
                 <label className="space-y-1">
-                  <span className="text-sm font-medium">Main Teacher</span>
+                  <span className="text-sm font-medium">Teacher</span>
                   <select
                     value={editSlotForm.teacherName}
                     onChange={(e) => setEditSlotForm({ ...editSlotForm, teacherName: e.target.value })}
