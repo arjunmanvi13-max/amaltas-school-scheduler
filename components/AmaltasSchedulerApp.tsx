@@ -437,8 +437,18 @@ export default function AmaltasSchedulerApp() {
 }, [todayKey]);
 
   function normalizeName(name: string) {
-    return name.trim().toLowerCase();
-  }
+  return name.trim().toLowerCase();
+}
+
+function isPlaceholderTeacherName(name: string) {
+  const normalized = normalizeName(name);
+  return (
+    normalized === "free" ||
+    normalized === "needs staffing" ||
+    normalized === "need staffing" ||
+    normalized === "needsstaffing"
+  );
+}
 
   function splitList(value: string) {
     return value
@@ -608,8 +618,9 @@ export default function AmaltasSchedulerApp() {
 
     return teachers
       .filter((teacher) => {
-        const isAbsentTeacher = teacher.id === absentTeacherId;
-        const isUnavailable = teacher.unavailable.includes(slot);
+        const isPlaceholderTeacher = isPlaceholderTeacherName(teacher.name);
+const isAbsentTeacher = teacher.id === absentTeacherId;
+const isUnavailable = teacher.unavailable.includes(slot);
         const alreadyTeaching = isTeacherAlreadyTeaching(teacher, day, period);
         const absentToday = absences.some(
           (absence) =>
@@ -618,7 +629,7 @@ export default function AmaltasSchedulerApp() {
             isPeriodInRange(period, absence.startPeriod, absence.endPeriod)
         );
 
-        return !isAbsentTeacher && !isUnavailable && !alreadyTeaching && !absentToday;
+        return !isPlaceholderTeacher && !isAbsentTeacher && !isUnavailable && !alreadyTeaching && !absentToday;
       })
       .map((teacher) => {
         let score = 25;
@@ -1300,7 +1311,7 @@ export default function AmaltasSchedulerApp() {
       const parsedTeachers = teacherRows
         .map((row, index) => {
           const name = readCell(row, ["Name", "Teacher", "Teacher Name"]);
-          if (!name) return null;
+if (!name || isPlaceholderTeacherName(name)) return null;
           const genderValue = readCell(row, ["Gender"]);
           const gender: "Male" | "Female" = genderValue.toLowerCase().startsWith("m") ? "Male" : "Female";
 
@@ -2235,7 +2246,7 @@ export default function AmaltasSchedulerApp() {
               </div>
 
               <div className="mt-3 grid gap-3 md:grid-cols-3">
-                {coverTeachers.slice(0, 6).map((teacher) => (
+                {coverTeachers.map((teacher) => (
                   <div key={teacher.id} className="rounded-lg border p-4">
                     <div className="flex items-center justify-between gap-3">
                       <h4 className="font-bold">{teacher.name}</h4>
